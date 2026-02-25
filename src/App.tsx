@@ -774,13 +774,27 @@ const Editor = ({ user }: { user: User }) => {
   const [selectedPresentationSlides, setSelectedPresentationSlides] = useState<Slide[]>([]);
 
   const fetchOtherPresentations = async () => {
-    const res = await fetch('/api/presentations');
+    const res = await fetch('/api/presentations', {
+      headers: { 'teacher-id': user.id }
+    });
+
+    if (!res.ok) {
+      throw new Error('Неуспешно зареждане на презентации');
+    }
+
     const data = await res.json();
     setOtherPresentations(data.filter((p: any) => p.id !== id));
   };
 
   const fetchSlidesForPresentation = async (pId: string) => {
-    const res = await fetch(`/api/presentations/${pId}`);
+    const res = await fetch(`/api/presentations/${pId}`, {
+      headers: { 'teacher-id': user.id }
+    });
+
+    if (!res.ok) {
+      throw new Error('Неуспешно зареждане на слайдове');
+    }
+
     const data = await res.json();
     setSelectedPresentationSlides(data.slides);
   };
