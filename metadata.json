@@ -1,0 +1,5 @@
+{
+  "name": "LessonMaster",
+  "description": "Система за създаване и провеждане на интерактивни уроци с PIN код.",
+  "requestFramePermissions": []
+}

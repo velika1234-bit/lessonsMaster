@@ -1,0 +1,3387 @@
+import { QRCodeSVG } from 'qrcode.react';
+import { GoogleGenAI } from "@google/genai";
+import { nanoid } from 'nanoid';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Plus, 
+  Play, 
+  Edit2, 
+  Trash2, 
+  ChevronRight, 
+  ChevronLeft, 
+  Users, 
+  Layout, 
+  Type, 
+  CheckSquare, 
+  LogOut,
+  Send,
+  Loader2,
+  Image as ImageIcon,
+  Video,
+  CheckCircle2,
+  ListChecks,
+  Move,
+  X,
+  Download,
+  BarChart3,
+  Award,
+  Monitor,
+  MapPin,
+  MessageSquare,
+  Palette,
+  Zap,
+  FileText,
+  History,
+  ArrowLeft,
+  Save,
+  Settings,
+  XCircle,
+  Trophy,
+  Link as LinkIcon
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  BrowserRouter as Router, 
+  Routes, 
+  Route, 
+  useNavigate, 
+  useParams,
+  useSearchParams,
+  Link
+} from 'react-router-dom';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
+
+// --- Helpers ---
+const getAvatarUrl = (seed: string) => `https://robohash.org/${seed}?set=set4&bgset=bg1`;
+
+const getYouTubeEmbedUrl = (url: string) => {
+  if (!url) return "";
+  let videoId = "";
+  try {
+    if (url.includes("youtube.com/watch")) {
+      const urlObj = new URL(url);
+      videoId = urlObj.searchParams.get("v") || "";
+    } else if (url.includes("youtu.be/")) {
+      videoId = url.split("youtu.be/")[1].split(/[?#]/)[0];
+    } else if (url.includes("youtube.com/embed/")) {
+      videoId = url.split("youtube.com/embed/")[1].split(/[?#]/)[0];
+    } else if (url.includes("youtube.com/shorts/")) {
+      videoId = url.split("youtube.com/shorts/")[1].split(/[?#]/)[0];
+    }
+  } catch (e) {
+    console.error("Invalid URL", e);
+  }
+  return videoId ? `https://www.youtube.com/embed/${videoId}` : url;
+};
+
+// --- Types ---
+type SlideType = 
+  | 'title' 
+  | 'text-image' 
+  | 'video' 
+  | 'quiz-single' 
+  | 'quiz-multi' 
+  | 'boolean'
+  | 'labeling'
+  | 'hotspot'
+  | 'open-question'
+  | 'whiteboard'
+  | 'matching';
+
+interface SlideOption {
+  text: string;
+  isCorrect: boolean;
+}
+
+interface Label {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+}
+
+interface Hotspot {
+  x: number;
+  y: number;
+  radius: number;
+}
+
+interface Slide {
+  id?: string;
+  type: SlideType;
+  duration?: number; // Duration in seconds
+  points?: number; // Points for correct answer
+  content: {
+    title: string;
+    body?: string;
+    imageUrl?: string;
+    videoUrl?: string;
+    options?: SlideOption[];
+    labels?: Label[];
+    hotspot?: Hotspot;
+    pairs?: { left: string, right: string, id: string }[];
+    backgroundImage?: string;
+    placeholder?: string;
+    // New styling properties
+    titleSize?: number;
+    titleColor?: string;
+    bodySize?: number;
+    bodyColor?: string;
+    imageScale?: number;
+    layout?: 'left' | 'right' | 'top' | 'bottom' | 'full';
+  };
+}
+
+interface User {
+  id: string;
+  email: string;
+  name: string;
+}
+
+interface Presentation {
+  id: string;
+  title: string;
+  slides: Slide[];
+  theme?: 'light' | 'dark' | 'indigo' | 'emerald' | 'sunset';
+  globalBackgroundImage?: string;
+}
+
+// --- Components ---
+
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false }: any) => {
+  const base = "px-6 py-3 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-sm";
+  const variants: any = {
+    primary: "bg-indigo-500 text-white hover:bg-indigo-600 shadow-lg shadow-indigo-100",
+    secondary: "bg-white text-indigo-600 border-2 border-indigo-50 hover:bg-indigo-50",
+    danger: "bg-rose-50 text-rose-600 hover:bg-rose-100 border-2 border-rose-100",
+    ghost: "text-gray-400 hover:bg-gray-50 hover:text-gray-600 rounded-xl"
+  };
+  
+  return (
+    <button 
+      onClick={onClick} 
+      disabled={disabled || loading}
+      className={`${base} ${variants[variant]} ${className}`}
+    >
+      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : children}
+    </button>
+  );
+};
+
+const Card = ({ children, className = "" }: any) => (
+  <div className={`bg-white rounded-3xl border border-gray-50 shadow-xl shadow-gray-100/50 p-8 ${className}`}>
+    {children}
+  </div>
+);
+
+// --- Auth Components ---
+
+const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
+  const [isLogin, setIsLogin] = useState(true);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleGoogleLogin = async () => {
+    try {
+      const res = await fetch('/api/auth/google/url');
+      const { url } = await res.json();
+      window.open(url, 'google_login', 'width=500,height=600');
+    } catch (err) {
+      setError('Грешка при стартиране на Google вход');
+    }
+  };
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        onLogin(event.data.user);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [onLogin]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
+    const body = isLogin ? { email, password } : { email, password, name };
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        onLogin(data);
+      } else {
+        setError(data.error || 'Възникна грешка');
+      }
+    } catch (err) {
+      setError('Грешка при свързване със сървъра');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-slate-200/50 p-10 border border-white"
+      >
+        <div className="text-center mb-10">
+          <div className="w-20 h-20 bg-indigo-500 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-indigo-100">
+            <Monitor className="text-white w-10 h-10" />
+          </div>
+          <h2 className="text-3xl font-black text-slate-900 tracking-tight">
+            {isLogin ? 'Влезте в профила си' : 'Създайте облачен профил'}
+          </h2>
+          <p className="text-slate-400 font-medium mt-2 px-4">
+            {isLogin 
+              ? 'Вашите презентации се пазят сигурно в облака и са достъпни от всеки компютър.' 
+              : 'Регистрирайте се, за да достъпвате уроците си от всяко място.'}
+          </p>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          {!isLogin && (
+            <div>
+              <label className="block text-[10px] font-black text-indigo-300 uppercase tracking-widest mb-2 ml-1">Име</label>
+              <input 
+                type="text" 
+                required 
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full px-5 py-4 rounded-2xl bg-slate-50 border-none focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder-slate-300"
+                placeholder="Вашето име"
+              />
+            </div>
+          )}
+          <div>
+            <label className="block text-[10px] font-black text-indigo-300 uppercase tracking-widest mb-2 ml-1">Имейл</label>
+            <input 
+              type="email" 
+              required 
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-5 py-4 rounded-2xl bg-slate-50 border-none focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder-slate-300"
+              placeholder="email@example.com"
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-indigo-300 uppercase tracking-widest mb-2 ml-1">Парола</label>
+            <input 
+              type="password" 
+              required 
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-5 py-4 rounded-2xl bg-slate-50 border-none focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder-slate-300"
+              placeholder="••••••••"
+            />
+          </div>
+
+          {error && (
+            <motion.div 
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="p-4 bg-rose-50 text-rose-500 text-xs font-bold rounded-2xl border border-rose-100"
+            >
+              {error}
+            </motion.div>
+          )}
+
+          <Button className="w-full py-4 text-lg" loading={loading}>
+            {isLogin ? 'Вход' : 'Регистрация'}
+          </Button>
+
+          <div className="relative my-8">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-slate-100"></div>
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white px-4 text-slate-400 font-bold">или</span>
+            </div>
+          </div>
+
+          <Button 
+            type="button"
+            variant="secondary" 
+            className="w-full py-4 border-slate-200 text-slate-600 hover:bg-slate-50"
+            onClick={handleGoogleLogin}
+          >
+            <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="Google" />
+            Вход с Google
+          </Button>
+        </form>
+
+        <div className="mt-8 text-center">
+          <button 
+            onClick={() => setIsLogin(!isLogin)}
+            className="text-indigo-400 font-bold text-sm hover:text-indigo-600 transition-colors"
+          >
+            {isLogin ? 'Нямате акаунт? Регистрирайте се' : 'Вече имате акаунт? Влезте'}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+// --- Pages ---
+
+const ReportsDashboard = ({ user }: { user: User }) => {
+  const [reports, setReports] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch('/api/reports', {
+      headers: { 'teacher-id': user.id }
+    })
+      .then(res => res.json())
+      .then(data => {
+        setReports(data);
+        setLoading(false);
+      });
+  }, [user.id]);
+
+  const deleteReport = async (id: string) => {
+    if (!confirm('Сигурни ли сте, че искате да изтриете този доклад?')) return;
+    await fetch(`/api/reports/${id}`, { 
+      method: 'DELETE',
+      headers: { 'teacher-id': user.id }
+    });
+    setReports(reports.filter(r => r.id !== id));
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto p-8">
+      <div className="flex justify-between items-center mb-12">
+        <div>
+          <h1 className="text-4xl font-black text-gray-900 mb-2 tracking-tight">Архив на сесиите</h1>
+          <p className="text-gray-400 font-medium">Прегледайте резултатите от проведените уроци.</p>
+        </div>
+        <Button variant="secondary" onClick={() => navigate('/')} className="px-6">
+          <ArrowLeft className="w-4 h-4" /> Обратно
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-20">
+          <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {reports.map(report => (
+            <Card key={report.id} className="hover:border-indigo-200 transition-all group border-white">
+              <div className="flex justify-between items-start mb-6">
+                <div className="p-4 bg-indigo-50 rounded-2xl text-indigo-500">
+                  <History className="w-6 h-6" />
+                </div>
+                <div className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">
+                  {new Date(report.created_at).toLocaleDateString('bg-BG')}
+                </div>
+              </div>
+              <h3 className="text-xl font-black text-gray-900 mb-2 line-clamp-1">{report.presentation_title}</h3>
+              <div className="flex items-center gap-4 text-xs font-bold text-gray-400 mb-6">
+                <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {report.data.students.length}</span>
+                <span className="flex items-center gap-1 text-emerald-400"><Award className="w-3 h-3" /> {Math.max(...report.data.students.map((s: any) => s.score), 0)} макс.</span>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="primary" className="flex-1" onClick={() => navigate(`/reports/${report.id}`)}>
+                  Преглед
+                </Button>
+                <Button variant="danger" className="w-12" onClick={() => deleteReport(report.id)}>
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            </Card>
+          ))}
+          {reports.length === 0 && (
+            <div className="col-span-full text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
+              <p className="text-gray-400">Все още нямате записани доклади.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ReportDetail = ({ user }: { user: User }) => {
+  const { id } = useParams();
+  const [report, setReport] = useState<any>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch(`/api/reports/${id}`, {
+      headers: { 'teacher-id': user.id }
+    })
+      .then(res => res.json())
+      .then(setReport);
+  }, [id, user.id]);
+
+  const downloadPDF = async () => {
+    const doc = new jsPDF();
+    
+    try {
+      const fontUrl = 'https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/Roboto-Regular.ttf';
+      const fontRes = await fetch(fontUrl);
+      const fontBuffer = await fontRes.arrayBuffer();
+      const fontBase64 = btoa(
+        new Uint8Array(fontBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      );
+      doc.addFileToVFS('Roboto-Regular.ttf', fontBase64);
+      doc.addFont('Roboto-Regular.ttf', 'Roboto', 'normal');
+      doc.setFont('Roboto');
+    } catch (e) {
+      console.warn("Could not load Cyrillic font", e);
+    }
+
+    doc.setFontSize(22);
+    doc.text("Отчет от презентация", 105, 20, { align: "center" });
+    
+    doc.setFontSize(16);
+    doc.text(report.presentation_title, 105, 30, { align: "center" });
+    
+    doc.setFontSize(12);
+    doc.text(`Дата: ${new Date(report.created_at).toLocaleDateString('bg-BG')}`, 20, 45);
+    
+    const tableData = report.data.students
+      .sort((a: any, b: any) => b.score - a.score)
+      .map((s: any, i: number) => [i + 1, s.name, s.score]);
+
+    autoTable(doc, {
+      startY: 60,
+      head: [['#', 'Име на ученик', 'Точки']],
+      body: tableData,
+      theme: 'striped',
+      headStyles: { fillColor: [79, 70, 229], font: 'Roboto', fontStyle: 'normal' },
+      styles: { font: 'Roboto', fontStyle: 'normal' }
+    });
+
+    let currentY = (doc as any).lastAutoTable.finalY + 20;
+    doc.setFontSize(16);
+    doc.text("Анализ по въпроси", 20, currentY);
+    currentY += 10;
+
+    report.data.slides.forEach((slide: any, idx: number) => {
+      if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching'].includes(slide.type)) {
+        if (currentY > 250) {
+          doc.addPage();
+          currentY = 20;
+          doc.setFont('Roboto');
+        }
+        const responses = report.data.students.map((s: any) => s.responses[idx]).filter((r: any) => r !== undefined);
+        let correctCount = 0;
+        responses.forEach((resp: any) => {
+          let isCorrect = false;
+          if (slide.type === 'quiz-single' || slide.type === 'boolean') {
+            const correctIdx = slide.content.options.findIndex((o: any) => o.isCorrect);
+            if (resp === correctIdx) isCorrect = true;
+          } else if (slide.type === 'quiz-multi') {
+            const correctIndices = slide.content.options.map((o: any, i: number) => o.isCorrect ? i : -1).filter((i: number) => i !== -1);
+            isCorrect = Array.isArray(resp) && resp.length === correctIndices.length && resp.every((r: any) => correctIndices.includes(r));
+          } else if (slide.type === 'hotspot') {
+            const hotspot = slide.content.hotspot;
+            if (hotspot && resp) {
+              const dist = Math.sqrt(Math.pow(resp.x - hotspot.x, 2) + Math.pow(resp.y - hotspot.y, 2));
+              if (dist <= hotspot.radius) isCorrect = true;
+            }
+          } else if (slide.type === 'matching') {
+            const pairs = slide.content.pairs || [];
+            let matchedCount = 0;
+            pairs.forEach((p: any) => {
+              if (resp[p.id] === p.id) matchedCount++;
+            });
+            if (pairs.length > 0 && matchedCount === pairs.length) isCorrect = true;
+          }
+          if (isCorrect) correctCount++;
+        });
+        doc.setFontSize(12);
+        doc.text(`${idx + 1}. ${slide.content.title}`, 20, currentY);
+        currentY += 7;
+        doc.text(`Успеваемост: ${((correctCount / (report.data.students.length || 1)) * 100).toFixed(1)}% (${correctCount}/${report.data.students.length})`, 20, currentY);
+        currentY += 15;
+      }
+    });
+
+    doc.save(`report-${report.id}.pdf`);
+  };
+
+  if (!report) return (
+    <div className="flex h-screen items-center justify-center">
+      <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
+    </div>
+  );
+
+  return (
+    <div className="max-w-4xl mx-auto p-8">
+      <div className="flex justify-between items-center mb-12">
+        <Button variant="ghost" onClick={() => navigate('/reports')}>
+          <ArrowLeft className="w-4 h-4" /> Обратно
+        </Button>
+        <Button variant="primary" onClick={downloadPDF}>
+          <Download className="w-4 h-4" /> Изтегли PDF
+        </Button>
+      </div>
+
+      <Card className="mb-8">
+        <h1 className="text-3xl font-black mb-2">{report.presentation_title}</h1>
+        <p className="text-gray-500">Проведена на {new Date(report.created_at).toLocaleString('bg-BG')}</p>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <Card className="text-center">
+          <div className="text-3xl font-black text-indigo-600 mb-1">{report.data.students.length}</div>
+          <div className="text-xs font-bold text-gray-400 uppercase">Ученици</div>
+        </Card>
+        <Card className="text-center">
+          <div className="text-3xl font-black text-green-600 mb-1">
+            {Math.round(report.data.students.reduce((acc: number, s: any) => acc + s.score, 0) / (report.data.students.length || 1))}
+          </div>
+          <div className="text-xs font-bold text-gray-400 uppercase">Среден резултат</div>
+        </Card>
+        <Card className="text-center">
+          <div className="text-3xl font-black text-orange-600 mb-1">
+            {report.data.slides.length}
+          </div>
+          <div className="text-xs font-bold text-gray-400 uppercase">Слайда</div>
+        </Card>
+      </div>
+
+      <Card>
+        <h2 className="text-xl font-bold mb-6">Резултати по ученици</h2>
+        <div className="space-y-4">
+          {report.data.students.sort((a: any, b: any) => b.score - a.score).map((student: any, idx: number) => (
+            <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+              <div className="flex items-center gap-4">
+                <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-indigo-600 shadow-sm">
+                  {idx + 1}
+                </div>
+                <span className="font-bold text-gray-700">{student.name}</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="text-sm font-bold text-indigo-600">{student.score} т.</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => {
+  const [presentations, setPresentations] = useState<Presentation[]>([]);
+  const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    fetch('/api/presentations', {
+      headers: { 'teacher-id': user.id }
+    })
+      .then(res => res.json())
+      .then(data => {
+        setPresentations(data);
+        setLoading(false);
+      });
+  }, [user.id]);
+
+  const createNew = async () => {
+    const res = await fetch('/api/presentations', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'teacher-id': user.id
+      },
+      body: JSON.stringify({ title: 'Нова презентация' })
+    });
+    const data = await res.json();
+    navigate(`/edit/${data.id}`);
+  };
+
+  const uploadPresentation = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        const res = await fetch('/api/presentations', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'teacher-id': user.id
+          },
+          body: JSON.stringify({ title: imported.title || 'Импортирана презентация' })
+        });
+        const data = await res.json();
+        
+        // Update with full content
+        await fetch(`/api/presentations/${data.id}`, {
+          method: 'PUT',
+          headers: { 
+            'Content-Type': 'application/json',
+            'teacher-id': user.id
+          },
+          body: JSON.stringify({
+            ...imported,
+            id: data.id
+          })
+        });
+        
+        setPresentations([{ ...imported, id: data.id }, ...presentations]);
+      } catch (err) {
+        alert('Невалиден файл.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const exportPresentation = async (p: Presentation) => {
+    const res = await fetch(`/api/presentations/${p.id}`, {
+      headers: { 'teacher-id': user.id }
+    });
+    const fullData = await res.json();
+    const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${p.title.replace(/\s+/g, '_')}.json`;
+    a.click();
+  };
+
+  const deletePresentation = async (id: string) => {
+    if (!confirm('Сигурни ли сте?')) return;
+    await fetch(`/api/presentations/${id}`, { 
+      method: 'DELETE',
+      headers: { 'teacher-id': user.id }
+    });
+    setPresentations(prev => prev.filter(p => p.id !== id));
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto p-8">
+      <div className="flex justify-between items-center mb-12">
+        <div className="flex items-center gap-6">
+          <div className="w-16 h-16 bg-indigo-500 rounded-3xl flex items-center justify-center text-white shadow-2xl shadow-indigo-200">
+            <Monitor className="w-8 h-8" />
+          </div>
+          <div>
+            <h1 className="text-4xl font-black text-gray-900 tracking-tight">Здравейте, {user.name}!</h1>
+            <div className="flex items-center gap-2 text-emerald-500 font-bold text-[10px] uppercase tracking-widest mt-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Облачна синхронизация: Активна
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <Button variant="secondary" onClick={() => navigate('/reports')}>
+            <FileText className="w-4 h-4" /> Доклади
+          </Button>
+          <Button variant="ghost" onClick={onLogout} className="text-red-500 hover:bg-red-50">
+            <LogOut className="w-4 h-4" /> Изход
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex justify-between items-center mb-8 bg-white/60 backdrop-blur-xl p-6 rounded-[2rem] border border-white shadow-xl shadow-slate-200/50">
+        <div className="flex gap-4">
+          <Button onClick={createNew} className="h-12 px-8">
+            <Plus className="w-5 h-5" /> Нов Урок
+          </Button>
+          <label className="cursor-pointer">
+            <div className="h-12 px-6 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 bg-white text-gray-600 border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 active:scale-95 shadow-sm">
+              <Download className="w-4 h-4" /> Качи урок
+            </div>
+            <input type="file" className="hidden" accept=".json" onChange={uploadPresentation} />
+          </label>
+        </div>
+        <div className="text-[10px] font-black text-indigo-300 uppercase tracking-[0.2em]">
+          {presentations.length} ПРЕЗЕНТАЦИИ
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-20">
+          <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {presentations.map(p => (
+            <motion.div key={p.id} layout>
+              <Card className="group hover:border-indigo-200 transition-colors">
+                <div className="h-32 bg-gray-50 rounded-xl mb-4 flex items-center justify-center text-gray-300 group-hover:bg-indigo-50 transition-colors">
+                  <Layout className="w-12 h-12" />
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">{p.title}</h3>
+                <div className="grid grid-cols-5 gap-1">
+                  <Button variant="secondary" className="col-span-2 px-1 text-[10px] h-9" onClick={() => navigate(`/edit/${p.id}`)}>
+                    <Edit2 className="w-3 h-3" /> Редактирай
+                  </Button>
+                  <Button variant="primary" className="h-9 p-0 flex items-center justify-center" onClick={() => navigate(`/host/${p.id}`)}>
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                  </Button>
+                  <Button variant="secondary" className="h-9 p-0 flex items-center justify-center" onClick={() => exportPresentation(p)}>
+                    <Download className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button variant="danger" className="h-9 p-0 flex items-center justify-center" onClick={() => deletePresentation(p.id)}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </Card>
+            </motion.div>
+          ))}
+          {presentations.length === 0 && (
+            <div className="col-span-full text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
+              <p className="text-gray-400">Нямате създадени презентации още.</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Editor = ({ user }: { user: User }) => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [presentation, setPresentation] = useState<Presentation | null>(null);
+  const [activeSlideIndex, setActiveSlideIndex] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiSourceText, setAiSourceText] = useState('');
+  const [aiMode, setAiMode] = useState<'presentation' | 'quiz'>('presentation');
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addModalTab, setAddModalTab] = useState<'new' | 'existing' | 'import' | 'ai'>('new');
+  const [otherPresentations, setOtherPresentations] = useState<Presentation[]>([]);
+  const [selectedPresentationId, setSelectedPresentationId] = useState<string | null>(null);
+  const [selectedPresentationSlides, setSelectedPresentationSlides] = useState<Slide[]>([]);
+
+  const fetchOtherPresentations = async () => {
+    const res = await fetch('/api/presentations');
+    const data = await res.json();
+    setOtherPresentations(data.filter((p: any) => p.id !== id));
+  };
+
+  const fetchSlidesForPresentation = async (pId: string) => {
+    const res = await fetch(`/api/presentations/${pId}`);
+    const data = await res.json();
+    setSelectedPresentationSlides(data.slides);
+  };
+
+  const importSlides = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target?.result as string);
+        const newSlides = Array.isArray(imported) ? imported : (imported.slides || []);
+        if (presentation) {
+          setPresentation({
+            ...presentation,
+            slides: [...presentation.slides, ...newSlides.map((s: any) => ({ ...s, id: nanoid(10) }))]
+          });
+        }
+        setShowAddModal(false);
+      } catch (err) {
+        alert('Невалиден файл.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const slideCategories = [
+    {
+      title: 'Нови познания',
+      items: [
+        { type: 'text-image', label: 'Статичен', icon: Monitor, color: 'bg-sky-400' },
+        { type: 'video', label: 'Видео', icon: Video, color: 'bg-rose-400' },
+      ]
+    },
+    {
+      title: 'Проверка на знание',
+      items: [
+        { type: 'quiz-single', label: 'Тестови', icon: CheckSquare, color: 'bg-indigo-400' },
+        { type: 'boolean', label: 'Вярно/Грешно', icon: ListChecks, color: 'bg-emerald-400' },
+        { type: 'matching', label: 'Свързване', icon: LinkIcon, color: 'bg-amber-400' },
+        { type: 'hotspot', label: 'Посочване (Област)', icon: MapPin, color: 'bg-violet-400' },
+        { type: 'labeling', label: 'Подреждане', icon: Move, color: 'bg-teal-400' },
+        { type: 'open-question', label: 'Отворен', icon: MessageSquare, color: 'bg-fuchsia-400' },
+      ]
+    },
+    {
+      title: 'Обратна връзка',
+      items: [
+        { type: 'whiteboard', label: 'Рисуване', icon: Palette, color: 'bg-orange-500' },
+        { type: 'open-question', label: 'Въпрос със свободен отговор', icon: Type, color: 'bg-orange-400' },
+      ]
+    }
+  ];
+
+  const generateWithAI = async () => {
+    if (!aiPrompt.trim() && !aiSourceText.trim()) return;
+    setIsGenerating(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      
+      const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON масив от интерактивни слайдове на български език.
+      Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+      Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
+      Важно: Генерирайте между 4 и 8 слайда. Ако е избран режим 'quiz', използвайте само типове въпроси.`;
+
+      let userPrompt = "";
+      if (aiMode === 'presentation') {
+        userPrompt = `Създай цялостна презентация въз основа на следното:
+        Тема: ${aiPrompt}
+        Изходен текст: ${aiSourceText}
+        Смеси информативни слайдове (title, text-image) с интерактивни въпроси (quiz-single, quiz-multi, boolean), за да ангажираш учениците.`;
+      } else {
+        userPrompt = `Създай тест (quiz), състоящ се САМО от интерактивни типове въпроси (quiz-single, quiz-multi, boolean, open-question, hotspot, labeling) въз основа на следното:
+        Тема: ${aiPrompt}
+        Изходен текст: ${aiSourceText}`;
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: userPrompt,
+        config: { 
+          systemInstruction,
+          responseMimeType: "application/json" 
+        }
+      });
+
+      const generatedSlides = JSON.parse(response.text || "[]");
+      if (presentation) {
+        setPresentation({
+          ...presentation,
+          slides: [...presentation.slides, ...generatedSlides.map((s: any) => ({ ...s, id: nanoid(10) }))]
+        });
+      }
+      setShowAiModal(false);
+      setAiPrompt('');
+      setAiSourceText('');
+    } catch (error) {
+      console.error("AI Generation failed:", error);
+      alert("Грешка при генерирането. Моля опитайте пак.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  useEffect(() => {
+    fetch(`/api/presentations/${id}`, {
+      headers: { 'teacher-id': user.id }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.slides) {
+          data.slides = data.slides.map((s: any) => {
+            if (s.type === 'matching' && !s.content.pairs) {
+              return { ...s, content: { ...s.content, pairs: [] } };
+            }
+            return s;
+          });
+        }
+        setPresentation(data);
+      });
+  }, [id, user.id]);
+
+  const save = async () => {
+    if (!presentation) return;
+    setSaveStatus('saving');
+    try {
+      const res = await fetch(`/api/presentations/${id}`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
+        body: JSON.stringify(presentation)
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Failed to save');
+      }
+      
+      setSaveStatus('saved');
+    } catch (error) {
+      console.error("Save failed:", error);
+      setSaveStatus('error');
+    }
+  };
+
+  // Auto-save effect
+  useEffect(() => {
+    if (!presentation) return;
+    
+    const timer = setTimeout(() => {
+      save();
+    }, 2000); // Auto-save after 2 seconds of inactivity
+
+    return () => clearTimeout(timer);
+  }, [presentation]);
+
+  const addSlide = (type: SlideType) => {
+    if (!presentation) return;
+    const newSlide: Slide = {
+      type,
+      points: ['quiz-single', 'quiz-multi', 'boolean', 'labeling', 'hotspot', 'open-question'].includes(type) ? 1 : undefined,
+      content: {
+        title: type === 'title' ? 'Заглавие' : 'Нов Слайд',
+        body: type === 'text-image' ? 'Въведете текст тук...' : '',
+        options: (type === 'quiz-single' || type === 'quiz-multi') ? [
+          { text: 'Опция 1', isCorrect: false },
+          { text: 'Опция 2', isCorrect: false }
+        ] : type === 'boolean' ? [
+          { text: 'Вярно', isCorrect: true },
+          { text: 'Грешно', isCorrect: false }
+        ] : undefined,
+        labels: type === 'labeling' ? [] : undefined,
+        pairs: type === 'matching' ? [] : undefined,
+        hotspot: type === 'hotspot' ? { x: 50, y: 50, radius: 10 } : undefined,
+        imageUrl: (type === 'text-image' || type === 'labeling' || type === 'hotspot' || type === 'whiteboard') ? '' : undefined,
+        videoUrl: type === 'video' ? '' : undefined,
+      }
+    };
+    const newSlides = [...presentation.slides];
+    newSlides.splice(activeSlideIndex + 1, 0, newSlide);
+    setPresentation({ ...presentation, slides: newSlides });
+    setActiveSlideIndex(activeSlideIndex + 1);
+  };
+
+  const updateSlide = (updates: Partial<Slide>) => {
+    if (!presentation) return;
+    const newSlides = [...presentation.slides];
+    newSlides[activeSlideIndex] = { ...newSlides[activeSlideIndex], ...updates };
+    setPresentation({ ...presentation, slides: newSlides });
+  };
+
+  const updateContent = (updates: any) => {
+    if (!presentation) return;
+    const slide = presentation.slides[activeSlideIndex];
+    updateSlide({ content: { ...slide.content, ...updates } });
+  };
+
+  if (!presentation) return null;
+
+  const activeSlide = presentation.slides[activeSlideIndex];
+
+  return (
+    <div className="h-screen flex flex-col bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-bottom border-gray-200 px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" onClick={() => navigate('/')}>
+            <ChevronLeft className="w-5 h-5" /> Назад
+          </Button>
+          <input 
+            className="text-xl font-bold bg-transparent border-none focus:ring-0 w-64"
+            value={presentation.title}
+            onChange={e => setPresentation({ ...presentation, title: e.target.value })}
+          />
+        </div>
+        <div className="flex gap-3 items-center">
+          <div className="text-xs font-medium mr-4 flex items-center gap-2">
+            {saveStatus === 'saving' && (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin text-indigo-600" />
+                <span className="text-gray-400">Запазване...</span>
+              </>
+            )}
+            {saveStatus === 'saved' && (
+              <>
+                <div className="w-2 h-2 rounded-full bg-green-500" />
+                <span className="text-gray-400">Всички промени са запазени</span>
+              </>
+            )}
+            {saveStatus === 'error' && (
+              <>
+                <div className="w-2 h-2 rounded-full bg-red-500" />
+                <span className="text-red-500">Грешка при запазване</span>
+              </>
+            )}
+          </div>
+          <Button 
+            variant="secondary" 
+            size="sm" 
+            onClick={save}
+            disabled={saveStatus === 'saving'}
+            className="flex items-center gap-2"
+          >
+            <Save className="w-4 h-4" />
+            Запази
+          </Button>
+          <Button variant="secondary" onClick={() => setShowAiModal(true)}>
+            <Send className="w-4 h-4" /> AI Асистент
+          </Button>
+          <Button variant="primary" onClick={() => navigate(`/host/${id}`)}>Пусни</Button>
+        </div>
+      </header>
+
+      {/* AI Modal */}
+      <AnimatePresence>
+        {showAiModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold">Генерирай с AI</h3>
+                <Button variant="ghost" onClick={() => setShowAiModal(false)}><X className="w-5 h-5" /></Button>
+              </div>
+              <p className="text-gray-500 mb-6">Въведете тема и AI ще създаде съдържание и въпроси за вас.</p>
+              <textarea 
+                className="w-full h-32 p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 mb-6"
+                placeholder="Напр. Слънчевата система за 4-ти клас..."
+                value={aiPrompt}
+                onChange={e => setAiPrompt(e.target.value)}
+              />
+              <div className="flex gap-3">
+                <Button variant="secondary" className="flex-1" onClick={() => setShowAiModal(false)}>Отказ</Button>
+                <Button variant="primary" className="flex-1" onClick={generateWithAI} loading={isGenerating}>
+                  Генерирай
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Slide Modal */}
+      <AnimatePresence>
+        {showAddModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                <div className="flex gap-8">
+                  {[
+                    { id: 'new', label: '+ ДОБАВИ ЕКРАН' },
+                    { id: 'existing', label: 'ИЗПОЛЗВАЙ СЪЩЕСТВУВАЩ' },
+                    { id: 'import', label: 'ИМПОРТИРАНЕ' },
+                    { id: 'ai', label: 'ИЗКУСТВЕН ИНТЕЛЕКТ' }
+                  ].map(tab => (
+                    <button 
+                      key={tab.id}
+                      onClick={() => {
+                        setAddModalTab(tab.id as any);
+                        if (tab.id === 'existing') fetchOtherPresentations();
+                      }}
+                      className={`font-bold pb-2 transition-all ${addModalTab === tab.id ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                      {tab.id === 'ai' && <Zap className="inline w-4 h-4 mr-1" />}
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <Button variant="ghost" onClick={() => setShowAddModal(false)}><X className="w-6 h-6" /></Button>
+              </div>
+
+              <div className="p-8 overflow-y-auto flex-1">
+                {addModalTab === 'new' && (
+                  <div className="space-y-8">
+                    {slideCategories.map((cat, i) => (
+                      <div key={i}>
+                        <h4 className="text-sm font-bold text-gray-500 mb-4">{cat.title}</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          {cat.items.map((item, j) => (
+                            <button 
+                              key={j}
+                              onClick={() => {
+                                addSlide(item.type as SlideType);
+                                setShowAddModal(false);
+                              }}
+                              className="flex items-center gap-4 p-4 rounded-xl border border-gray-100 hover:border-indigo-200 hover:bg-indigo-50 transition-all text-left group"
+                            >
+                              <div className={`w-12 h-12 rounded-xl ${item.color} flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform`}>
+                                <item.icon className="w-6 h-6" />
+                              </div>
+                              <span className="font-bold text-gray-700">{item.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {addModalTab === 'existing' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-full">
+                    <div className="border-r border-gray-100 pr-8 overflow-y-auto">
+                      <h4 className="text-sm font-bold text-gray-500 mb-4 uppercase">Изберете презентация</h4>
+                      <div className="space-y-2">
+                        {otherPresentations.map(p => (
+                          <button 
+                            key={p.id}
+                            onClick={() => {
+                              setSelectedPresentationId(p.id);
+                              fetchSlidesForPresentation(p.id);
+                            }}
+                            className={`w-full text-left p-4 rounded-xl border transition-all ${selectedPresentationId === p.id ? 'border-indigo-600 bg-indigo-50 font-bold' : 'border-gray-100 hover:bg-gray-50'}`}
+                          >
+                            {p.title}
+                          </button>
+                        ))}
+                        {otherPresentations.length === 0 && <p className="text-gray-400 italic">Няма други презентации.</p>}
+                      </div>
+                    </div>
+                    <div className="overflow-y-auto">
+                      <h4 className="text-sm font-bold text-gray-500 mb-4 uppercase">Изберете слайд</h4>
+                      <div className="grid grid-cols-1 gap-4">
+                        {selectedPresentationSlides.map((slide, idx) => (
+                          <div 
+                            key={idx}
+                            onClick={() => {
+                              if (presentation) {
+                                setPresentation({
+                                  ...presentation,
+                                  slides: [...presentation.slides, { ...slide, id: nanoid(10) }]
+                                });
+                                setShowAddModal(false);
+                              }
+                            }}
+                            className="aspect-video bg-gray-50 rounded-xl border-2 border-gray-100 p-4 cursor-pointer hover:border-indigo-600 transition-all"
+                          >
+                            <div className="text-[10px] font-black text-gray-300 uppercase mb-1">{slide.type}</div>
+                            <div className="font-bold text-gray-700">{slide.content.title}</div>
+                          </div>
+                        ))}
+                        {!selectedPresentationId && <p className="text-gray-400 italic">Изберете презентация отляво.</p>}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {addModalTab === 'import' && (
+                  <div className="flex flex-col items-center justify-center h-full py-12">
+                    <div className="w-20 h-20 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 mb-6">
+                      <Download className="w-10 h-10" />
+                    </div>
+                    <h3 className="text-2xl font-bold mb-2">Импортиране на слайдове</h3>
+                    <p className="text-gray-500 mb-8 text-center max-w-md">Качете JSON файл с презентация или слайдове, за да ги добавите към текущия урок.</p>
+                    <label className="cursor-pointer">
+                      <div className="px-5 py-2.5 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 bg-indigo-500 text-white hover:bg-indigo-600 shadow-lg shadow-indigo-100 active:scale-95">
+                        Избери файл
+                      </div>
+                      <input type="file" className="hidden" accept=".json" onChange={importSlides} />
+                    </label>
+                  </div>
+                )}
+
+                {addModalTab === 'ai' && (
+                  <div className="max-w-2xl mx-auto py-8">
+                    <div className="flex items-center gap-4 mb-8">
+                      <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white shadow-xl">
+                        <Zap className="w-8 h-8" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold">Генерирай с AI</h3>
+                        <p className="text-gray-500 text-sm">Опишете темата или поставете текст, от който да създадем урока.</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                      <button 
+                        onClick={() => setAiMode('presentation')}
+                        className={`p-4 rounded-xl border-2 transition-all text-left ${aiMode === 'presentation' ? 'border-indigo-600 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                      >
+                        <div className="font-bold mb-1">Пълна презентация</div>
+                        <div className="text-xs text-gray-500">Информативни слайдове и въпроси</div>
+                      </button>
+                      <button 
+                        onClick={() => setAiMode('quiz')}
+                        className={`p-4 rounded-xl border-2 transition-all text-left ${aiMode === 'quiz' ? 'border-indigo-600 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                      >
+                        <div className="font-bold mb-1">Само тест</div>
+                        <div className="text-xs text-gray-500">Само интерактивни въпроси</div>
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Тема или заглавие</label>
+                        <input 
+                          type="text"
+                          className="w-full p-4 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 text-lg"
+                          placeholder="Напр. Слънчевата система за 4-ти клас..."
+                          value={aiPrompt}
+                          onChange={e => setAiPrompt(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Изходен текст (по желание)</label>
+                        <textarea 
+                          className="w-full h-48 p-4 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 text-base"
+                          placeholder="Поставете тук текста, от който искате да се генерират слайдовете..."
+                          value={aiSourceText}
+                          onChange={e => setAiSourceText(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <Button 
+                      variant="primary" 
+                      className="w-full h-16 text-xl shadow-xl shadow-indigo-100 mt-8" 
+                      onClick={generateWithAI} 
+                      loading={isGenerating}
+                    >
+                      Генерирай {aiMode === 'presentation' ? 'Презентация' : 'Тест'}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar */}
+        <div className="w-72 bg-slate-50 border-r border-slate-200 flex flex-col">
+          <div className="p-6">
+            <Button variant="primary" className="w-full py-4 rounded-2xl shadow-xl shadow-indigo-100" onClick={() => setShowAddModal(true)}>
+              <Plus className="w-5 h-5" /> Добави екран
+            </Button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">
+            {presentation.slides.map((slide, idx) => (
+              <div key={idx} className="group relative">
+                <motion.div 
+                  whileHover={{ scale: 1.02 }}
+                  onClick={() => setActiveSlideIndex(idx)}
+                  className={`relative aspect-video rounded-2xl border-2 cursor-pointer overflow-hidden transition-all ${activeSlideIndex === idx ? 'border-indigo-500 ring-4 ring-indigo-50 shadow-lg' : 'border-white bg-white hover:border-indigo-200'}`}
+                >
+                  <div className="absolute top-2 left-2 z-10 w-6 h-6 bg-white/90 backdrop-blur rounded-lg flex items-center justify-center text-[10px] font-black shadow-sm text-indigo-600">
+                    {idx + 1}
+                  </div>
+                  <div 
+                    className="w-full h-full flex flex-col p-3"
+                    style={{ backgroundColor: slide.content.backgroundColor || '#ffffff' }}
+                  >
+                    <div className="text-[8px] font-black text-indigo-200 uppercase mb-1 tracking-wider">{slide.type}</div>
+                    <div className="text-[10px] font-bold text-slate-600 line-clamp-2 leading-tight">
+                      {slide.content.title || 'Без заглавие'}
+                    </div>
+                    <div className="mt-auto flex justify-end opacity-20 text-indigo-400">
+                      {slide.type === 'text-image' && <ImageIcon className="w-4 h-4" />}
+                      {slide.type === 'quiz-single' && <CheckSquare className="w-4 h-4" />}
+                      {slide.type === 'whiteboard' && <Palette className="w-4 h-4" />}
+                    </div>
+                  </div>
+                </motion.div>
+                
+                {/* Reorder Controls */}
+                <div className="absolute -right-2 top-1/2 -translate-y-1/2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
+                  <button 
+                    disabled={idx === 0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newSlides = [...presentation.slides];
+                      [newSlides[idx], newSlides[idx - 1]] = [newSlides[idx - 1], newSlides[idx]];
+                      setPresentation({ ...presentation, slides: newSlides });
+                      setActiveSlideIndex(idx - 1);
+                    }}
+                    className="p-1 bg-white rounded-full shadow-md border border-gray-100 text-gray-400 hover:text-indigo-600 disabled:opacity-30"
+                  >
+                    <ChevronLeft className="w-3 h-3 rotate-90" />
+                  </button>
+                  <button 
+                    disabled={idx === presentation.slides.length - 1}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newSlides = [...presentation.slides];
+                      [newSlides[idx], newSlides[idx + 1]] = [newSlides[idx + 1], newSlides[idx]];
+                      setPresentation({ ...presentation, slides: newSlides });
+                      setActiveSlideIndex(idx + 1);
+                    }}
+                    className="p-1 bg-white rounded-full shadow-md border border-gray-100 text-gray-400 hover:text-indigo-600 disabled:opacity-30"
+                  >
+                    <ChevronLeft className="w-3 h-3 -rotate-90" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          
+          <div className="p-4 border-t border-gray-100">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Оформление</p>
+            <div className="space-y-4">
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-2">Общ Фон (URL)</label>
+                <input 
+                  className="w-full p-2 text-xs border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  placeholder="https://..."
+                  value={presentation.globalBackgroundImage || ''}
+                  onChange={e => setPresentation({ ...presentation, globalBackgroundImage: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-2">Тема</label>
+                <div className="grid grid-cols-5 gap-2">
+                  {['light', 'dark', 'indigo', 'emerald', 'sunset'].map(t => (
+                    <button 
+                      key={t}
+                      onClick={() => setPresentation({ ...presentation, theme: t as any })}
+                      className={`w-full aspect-square rounded-lg border-2 transition-all ${presentation.theme === t ? 'border-indigo-600 scale-110' : 'border-transparent'} ${
+                        t === 'light' ? 'bg-white' : 
+                        t === 'dark' ? 'bg-gray-900' : 
+                        t === 'indigo' ? 'bg-indigo-600' : 
+                        t === 'emerald' ? 'bg-emerald-600' : 'bg-orange-500'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Editor Area */}
+        <main className="flex-1 p-12 overflow-y-auto relative bg-slate-100/50">
+          {presentation.globalBackgroundImage && (
+            <div 
+              className="absolute inset-0 opacity-10 pointer-events-none"
+              style={{ backgroundImage: `url(${presentation.globalBackgroundImage})`, backgroundSize: 'cover' }}
+            />
+          )}
+          {activeSlide ? (
+            <div className="max-w-3xl mx-auto relative z-10">
+              <Card 
+                className="min-h-[400px] flex flex-col p-12 overflow-hidden transition-colors border-white shadow-2xl shadow-slate-200/50 relative"
+                style={{ backgroundColor: activeSlide.content.backgroundColor || '#ffffff' }}
+              >
+                {presentation.globalBackgroundImage && (
+                  <div 
+                    className="absolute inset-0 opacity-10 pointer-events-none"
+                    style={{ backgroundImage: `url(${presentation.globalBackgroundImage})`, backgroundSize: 'cover' }}
+                  />
+                )}
+                <div className="flex justify-between items-start mb-8 relative z-10">
+                  <div className="flex-1 mr-8">
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase">Заглавие</label>
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-gray-400">Цвят:</span>
+                          <input 
+                            type="color" 
+                            className="w-6 h-6 rounded border-none p-0 bg-transparent cursor-pointer"
+                            value={activeSlide.content.titleColor || '#000000'}
+                            onChange={e => updateContent({ titleColor: e.target.value })}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] text-gray-400">Размер:</span>
+                          <input 
+                            type="range" min="20" max="100" className="w-20 h-1 accent-indigo-600"
+                            value={activeSlide.content.titleSize || 40}
+                            onChange={e => updateContent({ titleSize: parseInt(e.target.value) })}
+                          />
+                        </div>
+                        <div className="flex items-center gap-2 border-l border-gray-100 pl-4">
+                          <span className="text-[10px] text-gray-400">Фон:</span>
+                          <input 
+                            type="color" 
+                            className="w-6 h-6 rounded border-none p-0 bg-transparent cursor-pointer"
+                            value={activeSlide.content.backgroundColor || '#ffffff'}
+                            onChange={e => updateContent({ backgroundColor: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <input 
+                      className="font-bold w-full border-none focus:ring-0 p-0 leading-tight bg-transparent"
+                      style={{ 
+                        fontSize: `${activeSlide.content.titleSize || 40}px`,
+                        color: activeSlide.content.titleColor || '#000000'
+                      }}
+                      placeholder="Заглавие на слайда"
+                      value={activeSlide.content.title}
+                      onChange={e => updateContent({ title: e.target.value })}
+                    />
+                  </div>
+                  {activeSlide.points !== undefined && (
+                    <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex flex-col items-center">
+                      <label className="text-[10px] font-bold text-indigo-400 uppercase mb-1">Точки</label>
+                      <input 
+                        type="number"
+                        className="w-16 text-center text-xl font-black text-indigo-600 bg-transparent border-none focus:ring-0"
+                        value={activeSlide.points}
+                        onChange={e => {
+                          const newSlides = [...presentation.slides];
+                          newSlides[activeSlideIndex] = { ...activeSlide, points: parseInt(e.target.value) || 0 };
+                          setPresentation({ ...presentation, slides: newSlides });
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                
+                {activeSlide.type === 'title' && (
+                  <div className="flex-1 flex items-center justify-center">
+                    <p className="text-gray-400 italic">Този слайд съдържа само голямо заглавие.</p>
+                  </div>
+                )}
+
+                {activeSlide.type === 'text-image' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
+                      <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-3">Оформление на екрана</label>
+                      <div className="grid grid-cols-5 gap-2">
+                        {[
+                          { id: 'left', label: 'Ляво', icon: ChevronLeft },
+                          { id: 'right', label: 'Дясно', icon: ChevronRight },
+                          { id: 'top', label: 'Горе', icon: ChevronLeft, rotate: 90 },
+                          { id: 'bottom', label: 'Долу', icon: ChevronLeft, rotate: -90 },
+                          { id: 'full', label: 'Текст', icon: Type }
+                        ].map(l => (
+                          <button 
+                            key={l.id}
+                            onClick={() => updateContent({ layout: l.id })}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition-all ${activeSlide.content.layout === l.id ? 'border-indigo-600 bg-white shadow-sm' : 'border-transparent hover:bg-white/50'}`}
+                          >
+                            <l.icon className={`w-4 h-4 text-indigo-600 ${l.rotate ? `rotate-${l.rotate}` : ''}`} />
+                            <span className="text-[8px] font-bold uppercase">{l.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase">Текст</label>
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-400">Цвят:</span>
+                            <input 
+                              type="color" 
+                              className="w-6 h-6 rounded border-none p-0 bg-transparent cursor-pointer"
+                              value={activeSlide.content.bodyColor || '#4b5563'}
+                              onChange={e => updateContent({ bodyColor: e.target.value })}
+                            />
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-400">Размер:</span>
+                            <input 
+                              type="range" min="12" max="48" className="w-20 h-1 accent-indigo-600"
+                              value={activeSlide.content.bodySize || 20}
+                              onChange={e => updateContent({ bodySize: parseInt(e.target.value) })}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <textarea 
+                        className="w-full border-none focus:ring-0 p-0 resize-none bg-transparent"
+                        style={{ 
+                          fontSize: `${activeSlide.content.bodySize || 20}px`,
+                          color: activeSlide.content.bodyColor || '#4b5563'
+                        }}
+                        placeholder="Вашият текст тук..."
+                        value={activeSlide.content.body}
+                        onChange={e => updateContent({ body: e.target.value })}
+                      />
+                    </div>
+                    {activeSlide.content.layout !== 'full' && (
+                      <div className="p-4 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                        <div className="flex justify-between items-center mb-2">
+                          <label className="text-xs font-bold text-gray-500">Снимка</label>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-gray-400">Мащаб:</span>
+                            <input 
+                              type="range" min="10" max="100" className="w-20 h-1 accent-indigo-600"
+                              value={activeSlide.content.imageScale || 100}
+                              onChange={e => updateContent({ imageScale: parseInt(e.target.value) })}
+                            />
+                          </div>
+                        </div>
+                        <input 
+                          className="w-full p-2 border border-gray-200 rounded-lg text-xs"
+                          placeholder="URL на снимка"
+                          value={activeSlide.content.imageUrl}
+                          onChange={e => updateContent({ imageUrl: e.target.value })}
+                        />
+                        {activeSlide.content.imageUrl && (
+                          <div className="mt-4 flex justify-center">
+                            <img 
+                              src={activeSlide.content.imageUrl} 
+                              style={{ width: `${activeSlide.content.imageScale || 100}%` }}
+                              className="object-contain rounded-lg" 
+                              alt="Preview" 
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeSlide.type === 'video' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="p-4 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                      <label className="block text-xs font-bold text-gray-500 mb-2">URL на видео (YouTube/MP4)</label>
+                      <input 
+                        className="w-full p-2 border border-gray-200 rounded-lg"
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        value={activeSlide.content.videoUrl}
+                        onChange={e => updateContent({ videoUrl: e.target.value })}
+                      />
+                    </div>
+                    {activeSlide.content.videoUrl && (
+                      <div className="w-full aspect-video rounded-xl overflow-hidden shadow-lg bg-black">
+                        {activeSlide.content.videoUrl.includes('youtube.com') || activeSlide.content.videoUrl.includes('youtu.be') ? (
+                          <iframe 
+                            className="w-full h-full"
+                            src={getYouTubeEmbedUrl(activeSlide.content.videoUrl)}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        ) : (
+                          <video src={activeSlide.content.videoUrl} controls className="w-full h-full" />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {(activeSlide.type === 'quiz-single' || activeSlide.type === 'quiz-multi') && (
+                  <div className="flex flex-col gap-4">
+                    {activeSlide.content.options?.map((opt, idx) => (
+                      <div key={idx} className="flex gap-2 items-center">
+                        <button 
+                          onClick={() => {
+                            const newOpts = [...(activeSlide.content.options || [])];
+                            if (activeSlide.type === 'quiz-single') {
+                              newOpts.forEach((o, i) => o.isCorrect = i === idx);
+                            } else {
+                              newOpts[idx].isCorrect = !newOpts[idx].isCorrect;
+                            }
+                            updateContent({ options: newOpts });
+                          }}
+                          className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs transition-colors ${opt.isCorrect ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-400'}`}
+                        >
+                          {opt.isCorrect ? <CheckCircle2 className="w-4 h-4" /> : String.fromCharCode(65 + idx)}
+                        </button>
+                        <input 
+                          className="flex-1 p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                          value={opt.text}
+                          onChange={e => {
+                            const newOpts = [...(activeSlide.content.options || [])];
+                            newOpts[idx].text = e.target.value;
+                            updateContent({ options: newOpts });
+                          }}
+                        />
+                        <Button variant="ghost" onClick={() => {
+                          const newOpts = activeSlide.content.options?.filter((_, i) => i !== idx);
+                          updateContent({ options: newOpts });
+                        }}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    ))}
+                    <Button variant="secondary" onClick={() => updateContent({ options: [...(activeSlide.content.options || []), { text: 'Нова опция', isCorrect: false }] })}>
+                      + Добави опция
+                    </Button>
+                  </div>
+                )}
+
+                {activeSlide.type === 'boolean' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      {activeSlide.content.options?.map((opt, i) => (
+                        <button 
+                          key={i} 
+                          onClick={() => {
+                            const newOpts = activeSlide.content.options?.map((o, idx) => ({
+                              ...o,
+                              isCorrect: idx === i
+                            }));
+                            updateContent({ options: newOpts });
+                          }}
+                          className={`p-8 rounded-3xl border-4 transition-all flex flex-col items-center gap-4 ${opt.isCorrect ? 'border-green-500 bg-green-50' : 'border-gray-100 hover:border-gray-200'}`}
+                        >
+                          <div className={`w-12 h-12 rounded-full flex items-center justify-center ${opt.isCorrect ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                            <CheckCircle2 className="w-6 h-6" />
+                          </div>
+                          <span className="text-xl font-black">{opt.text}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeSlide.type === 'hotspot' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="p-4 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                      <label className="text-xs font-bold text-gray-500 block mb-2">Изображение за посочване</label>
+                      <input 
+                        className="w-full p-2 border border-gray-200 rounded-lg text-xs"
+                        placeholder="URL на снимка"
+                        value={activeSlide.content.imageUrl}
+                        onChange={e => updateContent({ imageUrl: e.target.value })}
+                      />
+                    </div>
+                    {activeSlide.content.imageUrl && (
+                      <div className="relative aspect-video bg-black rounded-2xl overflow-hidden group">
+                        <img src={activeSlide.content.imageUrl} className="w-full h-full object-contain opacity-80" alt="Hotspot" />
+                        <div 
+                          className="absolute border-4 border-indigo-500 bg-indigo-500/30 rounded-full cursor-move shadow-[0_0_20px_rgba(99,102,241,0.5)]"
+                          style={{
+                            left: `${activeSlide.content.hotspot?.x || 50}%`,
+                            top: `${activeSlide.content.hotspot?.y || 50}%`,
+                            width: `${(activeSlide.content.hotspot?.radius || 10) * 2}%`,
+                            height: `${(activeSlide.content.hotspot?.radius || 10) * 2}%`,
+                            transform: 'translate(-50%, -50%)'
+                          }}
+                          onMouseDown={(e) => {
+                            const rect = e.currentTarget.parentElement?.getBoundingClientRect();
+                            if (!rect) return;
+                            const onMouseMove = (moveEvent: MouseEvent) => {
+                              const x = Math.max(0, Math.min(100, ((moveEvent.clientX - rect.left) / rect.width) * 100));
+                              const y = Math.max(0, Math.min(100, ((moveEvent.clientY - rect.top) / rect.height) * 100));
+                              updateContent({ hotspot: { ...activeSlide.content.hotspot!, x, y } });
+                            };
+                            const onMouseUp = () => {
+                              window.removeEventListener('mousemove', onMouseMove);
+                              window.removeEventListener('mouseup', onMouseUp);
+                            };
+                            window.addEventListener('mousemove', onMouseMove);
+                            window.addEventListener('mouseup', onMouseUp);
+                          }}
+                        >
+                          {/* Resize Handle */}
+                          <div 
+                            className="absolute bottom-0 right-0 w-6 h-6 bg-white rounded-full border-2 border-indigo-500 cursor-nwse-resize flex items-center justify-center shadow-lg"
+                            style={{ transform: 'translate(30%, 30%)' }}
+                            onMouseDown={(e) => {
+                              e.stopPropagation();
+                              const rect = e.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
+                              if (!rect) return;
+                              const startX = activeSlide.content.hotspot?.x || 50;
+                              const startY = activeSlide.content.hotspot?.y || 50;
+                              const onMouseMove = (moveEvent: MouseEvent) => {
+                                const currentX = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+                                const currentY = ((moveEvent.clientY - rect.top) / rect.height) * 100;
+                                const dist = Math.sqrt(Math.pow(currentX - startX, 2) + Math.pow(currentY - startY, 2));
+                                updateContent({ hotspot: { ...activeSlide.content.hotspot!, radius: Math.max(2, Math.min(40, dist)) } });
+                              };
+                              const onMouseUp = () => {
+                                window.removeEventListener('mousemove', onMouseMove);
+                                window.removeEventListener('mouseup', onMouseUp);
+                              };
+                              window.addEventListener('mousemove', onMouseMove);
+                              window.addEventListener('mouseup', onMouseUp);
+                            }}
+                          >
+                            <div className="w-1 h-1 bg-indigo-500 rounded-full" />
+                          </div>
+                        </div>
+                        <div className="absolute bottom-4 left-4 right-4 bg-black/60 backdrop-blur p-3 rounded-xl text-white text-xs flex justify-between items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span>Влачете кръга, за да определите вярната област</span>
+                          <div className="flex items-center gap-2">
+                            <span>Размер:</span>
+                            <input 
+                              type="range" min="2" max="30" 
+                              value={activeSlide.content.hotspot?.radius || 10}
+                              onChange={e => updateContent({ hotspot: { ...activeSlide.content.hotspot!, radius: parseInt(e.target.value) } })}
+                              className="w-24 accent-indigo-500"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeSlide.type === 'open-question' && (
+                  <div className="flex flex-col gap-4">
+                    <p className="text-gray-400 italic">Учениците ще могат да пишат свободен текст като отговор.</p>
+                    <input 
+                      className="w-full p-3 border border-gray-200 rounded-xl"
+                      placeholder="Подсказка (Placeholder)..."
+                      value={activeSlide.content.placeholder || ''}
+                      onChange={e => updateContent({ placeholder: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                {activeSlide.type === 'labeling' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="p-4 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                      <label className="block text-xs font-bold text-gray-500 mb-2">URL на фоново изображение</label>
+                      <input 
+                        className="w-full p-2 border border-gray-200 rounded-lg"
+                        placeholder="https://example.com/diagram.jpg"
+                        value={activeSlide.content.imageUrl}
+                        onChange={e => updateContent({ imageUrl: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-3">
+                      <label className="block text-xs font-bold text-gray-500 uppercase">Етикети и Зони за поставяне</label>
+                      <p className="text-xs text-gray-400 mb-2">Поставете етикетите върху изображението. Тези позиции ще станат "зони за поставяне" за учениците.</p>
+                      <div className="relative aspect-video bg-gray-100 rounded-xl overflow-hidden border border-gray-200 mb-4">
+                        {activeSlide.content.imageUrl && (
+                          <img src={activeSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50" alt="BG" />
+                        )}
+                        <div className="absolute inset-0" id="label-editor-container">
+                          {activeSlide.content.labels?.map((label, idx) => (
+                            <motion.div
+                              key={label.id}
+                              drag
+                              dragMomentum={false}
+                              onDragEnd={(_, info) => {
+                                const container = document.getElementById('label-editor-container');
+                                if (container) {
+                                  const rect = container.getBoundingClientRect();
+                                  const x = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
+                                  const y = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                                  const newLabels = [...(activeSlide.content.labels || [])];
+                                  newLabels[idx] = { ...newLabels[idx], x, y };
+                                  updateContent({ labels: newLabels });
+                                }
+                              }}
+                              className="absolute cursor-move bg-white px-3 py-1 rounded shadow-md border-2 border-indigo-500 text-xs font-bold text-indigo-600 min-w-[80px] text-center"
+                              style={{ left: `${label.x}%`, top: `${label.y}%`, transform: 'translate(-50%, -50%)' }}
+                            >
+                              {label.text}
+                            </motion.div>
+                          ))}
+                        </div>
+                      </div>
+                      {activeSlide.content.labels?.map((label, idx) => (
+                        <div key={label.id} className="flex gap-2">
+                          <input 
+                            className="flex-1 p-2 border border-gray-200 rounded-lg"
+                            value={label.text}
+                            onChange={e => {
+                              const newLabels = [...(activeSlide.content.labels || [])];
+                              newLabels[idx].text = e.target.value;
+                              updateContent({ labels: newLabels });
+                            }}
+                          />
+                          <Button variant="ghost" onClick={() => {
+                            const newLabels = activeSlide.content.labels?.filter((_, i) => i !== idx);
+                            updateContent({ labels: newLabels });
+                          }}>
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ))}
+                      <Button variant="secondary" onClick={() => updateContent({ 
+                        labels: [...(activeSlide.content.labels || []), { id: nanoid(5), text: 'Нов етикет', x: 50, y: 50 }] 
+                      })}>
+                        + Добави етикет
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {activeSlide.type === 'matching' && (
+                  <div className="flex flex-col gap-6">
+                    <div className="space-y-4">
+                      <label className="block text-xs font-bold text-gray-500 uppercase">Двойки за свързване</label>
+                      <p className="text-xs text-gray-400">Добавете двойки от елементи. Учениците ще трябва да ги свържат правилно.</p>
+                      
+                      <div className="space-y-3">
+                        {activeSlide.content.pairs?.map((pair, idx) => (
+                          <div key={pair.id} className="flex gap-3 items-center bg-gray-50 p-3 rounded-xl border border-gray-100">
+                            <div className="flex-1 space-y-2">
+                              <input 
+                                className="w-full p-2 border border-gray-200 rounded-lg text-sm"
+                                placeholder="Ляв елемент"
+                                value={pair.left}
+                                onChange={e => {
+                                  const newPairs = [...(activeSlide.content.pairs || [])];
+                                  newPairs[idx].left = e.target.value;
+                                  updateContent({ pairs: newPairs });
+                                }}
+                              />
+                              <input 
+                                className="w-full p-2 border border-gray-200 rounded-lg text-sm"
+                                placeholder="Десен елемент"
+                                value={pair.right}
+                                onChange={e => {
+                                  const newPairs = [...(activeSlide.content.pairs || [])];
+                                  newPairs[idx].right = e.target.value;
+                                  updateContent({ pairs: newPairs });
+                                }}
+                              />
+                            </div>
+                            <Button variant="ghost" className="text-red-500" onClick={() => {
+                              const newPairs = activeSlide.content.pairs?.filter((_, i) => i !== idx);
+                              updateContent({ pairs: newPairs });
+                            }}>
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      
+                      <Button variant="secondary" className="w-full" onClick={() => {
+                        const newPairs = [...(activeSlide.content.pairs || []), { id: nanoid(), left: '', right: '' }];
+                        updateContent({ pairs: newPairs });
+                      }}>
+                        + Добави двойка
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Timer Settings */}
+                {['quiz-single', 'quiz-multi', 'open-question', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching'].includes(activeSlide.type) && (
+                  <div className="mt-12 pt-8 border-t border-gray-100">
+                    <label className="block text-xs font-bold text-gray-400 uppercase mb-4">Настройки на времето</label>
+                    <div className="flex items-center gap-4">
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="120" 
+                        step="5"
+                        className="flex-1 accent-indigo-600"
+                        value={activeSlide.duration || 0}
+                        onChange={e => updateSlide({ duration: parseInt(e.target.value) })}
+                      />
+                      <span className="w-20 text-center font-bold text-indigo-600">
+                        {activeSlide.duration ? `${activeSlide.duration} сек` : 'Без лимит'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </Card>
+              <div className="mt-8 flex justify-end">
+                <Button variant="danger" onClick={() => {
+                  const newSlides = presentation.slides.filter((_, i) => i !== activeSlideIndex);
+                  setPresentation({ ...presentation, slides: newSlides });
+                  setActiveSlideIndex(Math.max(0, activeSlideIndex - 1));
+                }}>
+                  Изтрий Слайд
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-gray-400">
+              <Layout className="w-16 h-16 mb-4 opacity-20" />
+              <p>Изберете или добавете слайд, за да започнете.</p>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+};
+
+const HostView = ({ user }: { user: User }) => {
+  const { id } = useParams();
+  const [pin, setPin] = useState<string | null>(null);
+  const [students, setStudents] = useState<any[]>([]);
+  const [currentSlide, setCurrentSlide] = useState<any>(null);
+  const [responses, setResponses] = useState<Record<string, any>>({});
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [isFinished, setIsFinished] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const timerRef = useRef<any>(null);
+  const ws = useRef<WebSocket | null>(null);
+  const navigate = useNavigate();
+
+  const [presentationData, setPresentationData] = useState<Presentation | null>(null);
+  useEffect(() => {
+    if (id) {
+      fetch(`/api/presentations/${id}`, {
+        headers: { 'teacher-id': user.id }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.slides) {
+            data.slides = data.slides.map((s: any) => {
+              if (s.type === 'matching' && !s.content.pairs) {
+                return { ...s, content: { ...s.content, pairs: [] } };
+              }
+              return s;
+            });
+          }
+          setPresentationData(data);
+        });
+    }
+  }, [id, user.id]);
+
+  useEffect(() => {
+    if (timeLeft !== null && timeLeft > 0) {
+      timerRef.current = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
+    } else if (timeLeft === 0) {
+      // Time up! Maybe auto-next or just lock responses
+    }
+    return () => clearTimeout(timerRef.current);
+  }, [timeLeft]);
+
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws.current = new WebSocket(`${protocol}//${window.location.host}`);
+
+    ws.current.onopen = () => {
+      setIsConnected(true);
+      ws.current?.send(JSON.stringify({ type: 'HOST_START', presentationId: id }));
+    };
+
+    ws.current.onclose = () => setIsConnected(false);
+
+    ws.current.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case 'ROOM_CREATED':
+          setPin(msg.pin);
+          if (msg.students) setStudents(msg.students);
+          if (msg.currentSlide) setCurrentSlide(msg.currentSlide);
+          break;
+        case 'STUDENT_JOINED':
+          setStudents(prev => [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }]);
+          break;
+        case 'STUDENT_LEFT':
+          setStudents(prev => prev.filter(s => s.id !== msg.id));
+          break;
+        case 'SLIDE_UPDATE':
+          console.log("Received slide update:", msg.slide);
+          setCurrentSlide(msg.slide);
+          setResponses({});
+          if (msg.slide?.duration) {
+            setTimeLeft(msg.slide.duration);
+          } else {
+            setTimeLeft(null);
+          }
+          break;
+        case 'ERROR':
+          alert(`Грешка: ${msg.message}`);
+          break;
+        case 'RESPONSE_RECEIVED':
+          setResponses(prev => ({ ...prev, [msg.id]: msg.response }));
+          if (msg.leaderboard) setLeaderboard(msg.leaderboard);
+          break;
+        case 'PRESENTATION_FINISHED':
+          setLeaderboard(msg.leaderboard);
+          setShowLeaderboard(true);
+          setCurrentSlide(null);
+          setIsFinished(true);
+          // Auto-save report to database when finished
+          if (presentationData) {
+            fetch('/api/reports', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'teacher-id': user.id
+              },
+              body: JSON.stringify({
+                presentationId: presentationData.id,
+                presentationTitle: presentationData.title,
+                data: {
+                  students: msg.leaderboard,
+                  slides: presentationData.slides,
+                  date: new Date().toLocaleDateString("bg-BG")
+                }
+              })
+            });
+          }
+          break;
+      }
+    };
+
+    return () => ws.current?.close();
+  }, [id]);
+
+  const nextSlide = () => {
+    ws.current?.send(JSON.stringify({ type: 'NEXT_SLIDE', pin, presentationId: id }));
+  };
+
+  const finishSession = async () => {
+    if (!pin) return;
+    try {
+      const res = await fetch(`/api/sessions/${pin}/report`);
+      const data = await res.json();
+      
+      await fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          presentationId: id,
+          presentationTitle: data.presentationTitle,
+          data: data
+        })
+      });
+      
+      navigate('/reports');
+    } catch (err) {
+      console.error("Failed to save report", err);
+      navigate('/');
+    }
+  };
+
+  const downloadReport = async () => {
+    if (!pin) return;
+    try {
+      const res = await fetch(`/api/sessions/${pin}/report`);
+      const data = await res.json();
+      
+      const doc = new jsPDF();
+      
+      // Add Cyrillic support by loading a font
+      try {
+        const fontUrl = 'https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/Roboto-Regular.ttf';
+        const fontRes = await fetch(fontUrl);
+        const fontBuffer = await fontRes.arrayBuffer();
+        const fontBase64 = btoa(
+          new Uint8Array(fontBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        );
+        doc.addFileToVFS('Roboto-Regular.ttf', fontBase64);
+        doc.addFont('Roboto-Regular.ttf', 'Roboto', 'normal');
+        doc.setFont('Roboto');
+      } catch (e) {
+        console.warn("Could not load Cyrillic font, falling back to default", e);
+      }
+      
+      // Title
+      doc.setFontSize(22);
+      doc.text("Отчет от презентация", 105, 20, { align: "center" });
+      
+      doc.setFontSize(16);
+      doc.text(data.presentationTitle, 105, 30, { align: "center" });
+      
+      doc.setFontSize(12);
+      doc.text(`Дата: ${data.date}`, 20, 45);
+      doc.text(`PIN: ${pin}`, 20, 52);
+      
+      // Summary Stats
+      const totalStudents = data.students.length;
+      const avgScore = data.students.reduce((acc: number, s: any) => acc + s.score, 0) / (totalStudents || 1);
+      
+      doc.text(`Брой ученици: ${totalStudents}`, 20, 65);
+      doc.text(`Среден резултат: ${avgScore.toFixed(1)} т.`, 20, 72);
+
+      // Student Scores Table
+      const tableData = data.students
+        .sort((a: any, b: any) => b.score - a.score)
+        .map((s: any, i: number) => [i + 1, s.name, s.score]);
+      
+      autoTable(doc, {
+        startY: 80,
+        head: [['#', 'Име на ученик', 'Точки']],
+        body: tableData,
+        theme: 'striped',
+        headStyles: { fillColor: [79, 70, 229], font: 'Roboto', fontStyle: 'normal' },
+        styles: { font: 'Roboto', fontStyle: 'normal' }
+      });
+
+      // Question Analysis
+      let currentY = (doc as any).lastAutoTable.finalY + 20;
+      doc.setFontSize(16);
+      doc.text("Анализ по въпроси", 20, currentY);
+      currentY += 10;
+
+      data.slides.forEach((slide: any, idx: number) => {
+        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling'].includes(slide.type)) {
+          if (currentY > 250) {
+            doc.addPage();
+            currentY = 20;
+            doc.setFont('Roboto');
+          }
+
+          const responses = data.students.map((s: any) => s.responses[idx]).filter((r: any) => r !== undefined);
+          let correctCount = 0;
+
+          // Simple success calculation
+          responses.forEach((resp: any) => {
+            let isCorrect = false;
+            if (slide.type === 'quiz-single' || slide.type === 'boolean') {
+              const correctIdx = slide.content.options.findIndex((o: any) => o.isCorrect);
+              if (resp === correctIdx) isCorrect = true;
+            } else if (slide.type === 'quiz-multi') {
+              const correctIndices = slide.content.options.map((o: any, i: number) => o.isCorrect ? i : -1).filter((i: number) => i !== -1);
+              isCorrect = Array.isArray(resp) && resp.length === correctIndices.length && resp.every((r: any) => correctIndices.includes(r));
+            } else if (slide.type === 'hotspot') {
+              const hotspot = slide.content.hotspot;
+              if (hotspot && resp) {
+                const dist = Math.sqrt(Math.pow(resp.x - hotspot.x, 2) + Math.pow(resp.y - hotspot.y, 2));
+                if (dist <= hotspot.radius) isCorrect = true;
+              }
+            } else if (slide.type === 'labeling') {
+              const labels = slide.content.labels || [];
+              let correctLabels = 0;
+              labels.forEach((l: any) => {
+                const sPos = resp?.[l.id];
+                if (sPos) {
+                  const dist = Math.sqrt(Math.pow(sPos.x - l.x, 2) + Math.pow(sPos.y - l.y, 2));
+                  if (dist < 10) correctLabels++;
+                }
+              });
+              if (labels.length > 0 && correctLabels === labels.length) isCorrect = true;
+            }
+
+            if (isCorrect) correctCount++;
+          });
+
+          const successRate = (correctCount / (totalStudents || 1)) * 100;
+
+          doc.setFontSize(12);
+          doc.setFont("Roboto", "normal");
+          doc.text(`Въпрос ${idx + 1}: ${slide.content.title}`, 20, currentY);
+          doc.setFont("Roboto", "normal");
+          doc.text(`Успеваемост: ${successRate.toFixed(1)}% (${correctCount}/${totalStudents})`, 20, currentY + 7);
+          currentY += 20;
+        }
+      });
+      
+      doc.save(`report-${pin}.pdf`);
+    } catch (err) {
+      console.error("Failed to download report", err);
+    }
+  };
+
+  const chartData = useMemo(() => {
+    if (!currentSlide || !currentSlide.content.options) return [];
+    
+    return currentSlide.content.options.map((opt: any, idx: number) => {
+      const count = Object.values(responses).filter(r => 
+        Array.isArray(r) ? r.includes(idx) : r === idx
+      ).length;
+      return {
+        name: opt.text,
+        votes: count,
+        isCorrect: opt.isCorrect
+      };
+    });
+  }, [currentSlide, responses]);
+
+  if (!pin) return (
+    <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
+      <div className="text-center">
+        <Loader2 className="w-12 h-12 animate-spin mx-auto mb-4" />
+        <p className="text-xl">Генериране на PIN код...</p>
+      </div>
+    </div>
+  );
+
+  // Lobby or Finished
+  if (!currentSlide) {
+    const joinUrl = `${window.location.origin}/join?pin=${pin}`;
+    
+    if (isFinished) {
+      return (
+        <div className="h-screen bg-indigo-600 text-white flex flex-col items-center justify-center p-12">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white text-gray-900 p-12 rounded-[3rem] shadow-2xl max-w-4xl w-full text-center"
+          >
+            <Award className="w-24 h-24 text-yellow-500 mx-auto mb-6" />
+            <h1 className="text-5xl font-black mb-2 uppercase tracking-tighter">Край на урока!</h1>
+            <p className="text-gray-500 text-xl mb-12">Поздравления за всички участници!</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+              <div className="space-y-6">
+                <h3 className="text-2xl font-black text-left flex items-center gap-2">
+                  <Users className="text-indigo-600" /> Финално класиране
+                </h3>
+                <div className="space-y-4">
+                  {leaderboard.map((s, i) => (
+                    <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                      <div className="flex items-center gap-3">
+                        <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${i === 0 ? 'bg-yellow-400 text-yellow-900' : i === 1 ? 'bg-gray-300 text-gray-800' : 'bg-orange-400 text-orange-900'}`}>
+                          {i + 1}
+                        </span>
+                        <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-10 h-10" alt="avatar" />
+                        <span className="font-bold text-lg">{s.name}</span>
+                      </div>
+                      <span className="font-black text-2xl text-indigo-600">{s.score}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-col justify-center gap-6">
+                <div className="bg-indigo-50 p-8 rounded-3xl border border-indigo-100">
+                  <h4 className="text-indigo-600 font-bold mb-2">Общо ученици</h4>
+                  <div className="text-5xl font-black">{students.length}</div>
+                </div>
+                <Button className="h-16 text-xl" onClick={downloadReport}>
+                  <Download className="w-6 h-6" /> Изтегли PDF Отчет
+                </Button>
+                <Button variant="secondary" className="h-16 text-xl" onClick={() => navigate('/')}>
+                  Към Таблото
+                </Button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="h-screen bg-indigo-600 text-white flex flex-col p-12">
+        <div className="flex-1 flex flex-col items-center justify-center">
+          <div className="flex flex-col md:flex-row items-center gap-12 mb-8">
+            <div className="text-center">
+              <p className="text-2xl opacity-80 mb-4">Присъединете се на:</p>
+              <h1 className="text-8xl font-black tracking-widest mb-4">{pin}</h1>
+              <p className="text-xl opacity-60">или сканирайте QR кода</p>
+            </div>
+            <div className="bg-white p-6 rounded-3xl shadow-2xl">
+              <QRCodeSVG 
+                value={joinUrl} 
+                size={200}
+                level="H"
+                includeMargin={false}
+                imageSettings={{
+                  src: "https://lucide.dev/logo.svg",
+                  x: undefined,
+                  y: undefined,
+                  height: 40,
+                  width: 40,
+                  excavate: true,
+                }}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 text-xl bg-white/10 px-6 py-3 rounded-full">
+              <Users className="w-6 h-6" />
+              <span>{students.length} ученици са тук</span>
+            </div>
+            {presentationData && presentationData.slides.length === 0 && (
+              <div className="bg-red-500/20 text-red-200 px-6 py-3 rounded-full border border-red-500/50 flex items-center gap-2">
+                <X className="w-5 h-5" />
+                <span>Презентацията няма слайдове!</span>
+              </div>
+            )}
+            <Button 
+              variant="ghost" 
+              className="text-white/60 hover:text-white hover:bg-white/10"
+              onClick={() => ws.current?.send(JSON.stringify({ type: 'HOST_START', presentationId: id }))}
+            >
+              <Loader2 className="w-4 h-4" /> Опресни списъка
+            </Button>
+          </div>
+        </div>
+        
+        <div className="grid grid-cols-6 gap-4 mb-12">
+          <AnimatePresence>
+            {students.map(s => (
+              <motion.div 
+                key={s.id}
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0, opacity: 0 }}
+                className="bg-white/20 p-4 rounded-2xl text-center font-bold flex flex-col items-center gap-2"
+              >
+                <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-12 h-12" alt="avatar" />
+                <span className="truncate w-full">{s.name}</span>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+        </div>
+
+        <Button 
+          variant="primary" 
+          className="w-full max-w-md mx-auto h-16 text-xl shadow-xl"
+          onClick={() => ws.current?.send(JSON.stringify({ type: 'START_PRESENTATION', pin, presentationId: id }))}
+          disabled={students.length === 0 || (presentationData?.slides.length === 0)}
+        >
+          Започни Презентацията
+        </Button>
+      </div>
+    );
+  }
+
+  // Presentation View
+  return (
+    <div className="h-screen flex flex-col bg-gray-50">
+      <header className="bg-white border-b border-gray-200 px-8 py-4 flex justify-between items-center">
+        <div className="flex items-center gap-4">
+          <Button variant="ghost" onClick={() => navigate('/')}><ChevronLeft className="w-4 h-4" /> Назад</Button>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`} />
+            <div className="bg-indigo-600 text-white px-4 py-1 rounded-full font-bold">PIN: {pin}</div>
+          </div>
+          <h2 className="text-xl font-bold text-gray-900">{currentSlide.content.title}</h2>
+        </div>
+        <div className="flex items-center gap-6">
+          <Button variant="secondary" onClick={() => {
+            const newState = !showLeaderboard;
+            setShowLeaderboard(newState);
+            ws.current?.send(JSON.stringify({ type: 'TOGGLE_LEADERBOARD', pin, show: newState }));
+          }}>
+            <Users className="w-4 h-4" /> Класация
+          </Button>
+          <Button variant="secondary" onClick={downloadReport}>
+            <Download className="w-4 h-4" /> PDF Отчет
+          </Button>
+          {timeLeft !== null && (
+            <div className={`flex items-center gap-2 font-black text-2xl ${timeLeft < 10 ? 'text-red-500 animate-pulse' : 'text-indigo-600'}`}>
+              <Loader2 className={`w-6 h-6 ${timeLeft > 0 ? 'animate-spin' : ''}`} />
+              {timeLeft}s
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-gray-500">
+            <Users className="w-5 h-5" />
+            <span className="font-bold">{Object.keys(responses).length} / {students.length}</span>
+          </div>
+          <Button onClick={nextSlide}>Следващ Слайд <ChevronRight className="w-4 h-4" /></Button>
+          <Button variant="danger" onClick={finishSession}>Край</Button>
+        </div>
+      </header>
+
+      <main className="flex-1 p-12 flex items-center justify-center relative">
+        {presentationData?.globalBackgroundImage && (
+          <div 
+            className="absolute inset-0 opacity-20 pointer-events-none"
+            style={{ backgroundImage: `url(${presentationData.globalBackgroundImage})`, backgroundSize: 'cover' }}
+          />
+        )}
+        {showLeaderboard && (
+          <motion.div 
+            initial={{ x: 300, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 300, opacity: 0 }}
+            className="absolute right-12 top-12 bottom-12 w-80 bg-white shadow-2xl rounded-3xl p-8 z-20 border border-gray-100"
+          >
+            <h3 className="text-2xl font-black mb-8 flex items-center gap-2">
+              <Users className="text-indigo-600" /> Топ 5
+            </h3>
+            <div className="space-y-4">
+              {leaderboard.map((s, i) => (
+                <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
+                  <div className="flex items-center gap-3">
+                    <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-[10px] flex items-center justify-center font-bold">
+                      {i + 1}
+                    </span>
+                    <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-8 h-8" alt="avatar" />
+                    <span className="font-bold">{s.name}</span>
+                  </div>
+                  <span className="font-black text-indigo-600">{s.score}</span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
+        <Card 
+          className="w-full max-w-5xl min-h-[600px] flex flex-col p-12 overflow-hidden relative z-10 transition-colors"
+          style={{ backgroundColor: currentSlide.content.backgroundColor || '#ffffff' }}
+        >
+          {presentationData?.globalBackgroundImage && (
+            <div 
+              className="absolute inset-0 opacity-15 pointer-events-none"
+              style={{ backgroundImage: `url(${presentationData.globalBackgroundImage})`, backgroundSize: 'cover' }}
+            />
+          )}
+          <h1 
+            className="font-bold mb-8 text-center leading-tight relative z-10"
+            style={{ 
+              fontSize: `${currentSlide.content.titleSize || (currentSlide.type === 'title' ? 72 : 40)}px`,
+              color: currentSlide.content.titleColor || '#000000'
+            }}
+          >
+            {currentSlide.content.title}
+          </h1>
+          
+          <div className="flex-1 flex flex-col items-center justify-center">
+            {currentSlide.type === 'text-image' && (
+              <div className={`flex gap-12 w-full items-center ${
+                currentSlide.content.layout === 'top' ? 'flex-col' : 
+                currentSlide.content.layout === 'bottom' ? 'flex-col-reverse' :
+                currentSlide.content.layout === 'right' ? 'flex-row-reverse' : 
+                currentSlide.content.layout === 'full' ? 'flex-col' : 'flex-row'
+              }`}>
+                <div className={`flex-1 ${currentSlide.content.layout === 'full' ? 'w-full text-center' : ''}`}>
+                  <p 
+                    className="leading-relaxed whitespace-pre-wrap"
+                    style={{ 
+                      fontSize: `${currentSlide.content.bodySize || 24}px`,
+                      color: currentSlide.content.bodyColor || '#4b5563'
+                    }}
+                  >
+                    {currentSlide.content.body}
+                  </p>
+                </div>
+                {currentSlide.content.layout !== 'full' && currentSlide.content.imageUrl && (
+                  <div className="flex-1 flex justify-center">
+                    <img 
+                      src={currentSlide.content.imageUrl} 
+                      style={{ width: `${currentSlide.content.imageScale || 100}%` }}
+                      className="rounded-2xl shadow-lg object-contain max-h-[60vh]" 
+                      alt="Slide" 
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {currentSlide.type === 'video' && currentSlide.content.videoUrl && (
+              <div className="w-full aspect-video rounded-2xl overflow-hidden shadow-2xl bg-black">
+                {currentSlide.content.videoUrl.includes('youtube.com') || currentSlide.content.videoUrl.includes('youtu.be') ? (
+                  <iframe 
+                    className="w-full h-full"
+                    src={getYouTubeEmbedUrl(currentSlide.content.videoUrl)}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                  />
+                ) : (
+                  <video src={currentSlide.content.videoUrl} controls className="w-full h-full" />
+                )}
+              </div>
+            )}
+
+            {(currentSlide.type === 'quiz-single' || currentSlide.type === 'quiz-multi' || currentSlide.type === 'boolean') && (
+              <div className="w-full h-[400px] mt-8">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 14, fontWeight: 600 }} />
+                    <YAxis hide />
+                    <Tooltip 
+                      cursor={{ fill: 'rgba(79, 70, 229, 0.05)' }}
+                      content={({ active, payload }) => {
+                        if (active && payload && payload.length) {
+                          return (
+                            <div className="bg-white p-4 shadow-xl rounded-xl border border-gray-100">
+                              <p className="font-bold text-gray-900">{payload[0].payload.name}</p>
+                              <p className="text-indigo-600 font-black text-xl">{payload[0].value} гласа</p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      }}
+                    />
+                    <Bar dataKey="votes" radius={[10, 10, 0, 0]}>
+                      {chartData.map((entry: any, index: number) => (
+                        <Cell 
+                          key={`cell-${index}`} 
+                          fill={entry.isCorrect ? '#10b981' : '#4f46e5'} 
+                          fillOpacity={entry.isCorrect ? 0.8 : 0.6}
+                        />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                <div className={`grid ${currentSlide.type === 'boolean' ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-4'} gap-4 mt-8`}>
+                  {currentSlide.content.options.map((opt: any, i: number) => (
+                    <div key={i} className="flex items-center gap-3 p-4 bg-white rounded-xl shadow-sm border border-gray-100">
+                      <div className={`w-4 h-4 rounded-full ${opt.isCorrect ? 'bg-green-500' : 'bg-indigo-500'}`} />
+                      <span className="font-medium text-gray-700">{opt.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {currentSlide.type === 'hotspot' && (
+              <div className="w-full flex-1 flex flex-col items-center">
+                <div className="relative aspect-video bg-gray-100 rounded-2xl overflow-hidden border border-gray-200 w-full max-w-4xl">
+                  {currentSlide.content.imageUrl && (
+                    <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-contain" alt="Hotspot" />
+                  )}
+                  {/* Student Clicks */}
+                  {Object.entries(responses).map(([sid, resp]: [string, any]) => (
+                    <div 
+                      key={sid}
+                      className="absolute w-4 h-4 bg-indigo-600 rounded-full border-2 border-white shadow-lg z-20"
+                      style={{
+                        left: `${resp.x}%`,
+                        top: `${resp.y}%`,
+                        transform: 'translate(-50%, -50%)'
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="mt-6 flex gap-6">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded-full bg-indigo-600" />
+                    <span className="text-sm font-bold text-gray-500">Кликове на ученици ({Object.keys(responses).length})</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {currentSlide.type === 'matching' && (
+              <div className="w-full flex-1 flex flex-col items-center">
+                <div className="grid grid-cols-2 gap-24 w-full max-w-4xl relative">
+                  {/* Left Column */}
+                  <div className="space-y-4">
+                    {currentSlide.content.pairs?.map((pair: any) => (
+                      <div key={`left-${pair.id}`} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 text-center font-bold text-xl">
+                        {pair.left}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Right Column */}
+                  <div className="space-y-4">
+                    {currentSlide.content.pairs?.map((pair: any) => (
+                      <div key={`right-${pair.id}`} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 text-center font-bold text-xl">
+                        {pair.right}
+                      </div>
+                    ))}
+                  </div>
+                  {/* Lines (Visual only for Host to show correct answers) */}
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-10">
+                    {currentSlide.content.pairs?.map((pair: any, idx: number) => (
+                      <line 
+                        key={`line-${pair.id}`}
+                        x1="45%" y1={`${(idx * 100 / currentSlide.content.pairs.length) + (50 / currentSlide.content.pairs.length)}%`}
+                        x2="55%" y2={`${(idx * 100 / currentSlide.content.pairs.length) + (50 / currentSlide.content.pairs.length)}%`}
+                        stroke="#4f46e5" strokeWidth="4" strokeDasharray="8 4"
+                      />
+                    ))}
+                  </svg>
+                </div>
+                <div className="mt-12 text-gray-400 font-bold uppercase tracking-widest">
+                  Учениците свързват двойките... ({Object.keys(responses).length} отговора)
+                </div>
+              </div>
+            )}
+
+            {currentSlide.type === 'labeling' && (
+              <div className="w-full flex-1 flex flex-col items-center">
+                <div className="relative aspect-video bg-gray-100 rounded-2xl overflow-hidden border border-gray-200 w-full max-w-4xl">
+                  {currentSlide.content.imageUrl && (
+                    <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-contain" alt="Labeling" />
+                  )}
+                  {/* Drop Zones (Visible to Host) */}
+                  {currentSlide.content.labels?.map((label: any) => (
+                    <div 
+                      key={`zone-${label.id}`}
+                      className="absolute border-2 border-dashed border-indigo-300 bg-indigo-50/30 rounded-lg flex items-center justify-center"
+                      style={{
+                        left: `${label.x}%`,
+                        top: `${label.y}%`,
+                        width: '100px',
+                        height: '40px',
+                        transform: 'translate(-50%, -50%)'
+                      }}
+                    >
+                      <div className="w-1 h-1 bg-indigo-300 rounded-full" />
+                    </div>
+                  ))}
+                  {/* Student Progress Dots */}
+                  {Object.entries(responses).map(([sid, resp]: [string, any]) => (
+                    Object.entries(resp || {}).map(([labelId, pos]: [string, any]) => (
+                      <div 
+                        key={`${sid}-${labelId}`}
+                        className="absolute w-2 h-2 bg-indigo-600 rounded-full border border-white shadow-sm z-20"
+                        style={{
+                          left: `${pos.x}%`,
+                          top: `${pos.y}%`,
+                          transform: 'translate(-50%, -50%)'
+                        }}
+                      />
+                    ))
+                  ))}
+                </div>
+                <div className="mt-6 flex gap-6">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 rounded-full bg-indigo-600" />
+                    <span className="text-sm font-bold text-gray-500">Позиции на етикетите ({Object.keys(responses).length} ученици)</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {currentSlide.type === 'open-question' && (
+              <div className="w-full grid grid-cols-2 gap-4 overflow-y-auto max-h-[400px] p-4">
+                <AnimatePresence>
+                  {Object.entries(responses).map(([sid, resp]) => (
+                    <motion.div 
+                      key={sid}
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-xl font-medium"
+                    >
+                      {resp}
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+                {Object.keys(responses).length === 0 && (
+                  <div className="col-span-2 text-center py-20 text-gray-300 italic">
+                    Очакваме отговори...
+                  </div>
+                )}
+              </div>
+            )}
+            {currentSlide.type === 'whiteboard' && (
+              <div className="w-full flex-1 flex flex-col items-center justify-center">
+                <div className="relative w-full aspect-video bg-white rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden">
+                  {currentSlide.content.imageUrl && (
+                    <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-20" alt="BG" />
+                  )}
+                  <div className="text-center text-gray-400">
+                    <Edit2 className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                    <p>Учениците рисуват в момента...</p>
+                    <p className="text-sm mt-2">{Object.keys(responses).length} изпратени рисунки</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      </main>
+    </div>
+  );
+};
+
+const StudentJoin = () => {
+  const [searchParams] = useSearchParams();
+  const [pin, setPin] = useState(searchParams.get('pin') || '');
+  const [name, setName] = useState('');
+  const [step, setStep] = useState<'pin' | 'name'>(searchParams.get('pin') ? 'name' : 'pin');
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
+
+  const handleJoin = () => {
+    if (step === 'pin') {
+      if (pin.length === 6) setStep('name');
+      else setError('Моля въведете 6-цифрен PIN');
+    } else {
+      if (name.trim()) {
+        navigate(`/play?pin=${pin}&name=${encodeURIComponent(name)}`);
+      } else {
+        setError('Моля въведете име');
+      }
+    }
+  };
+
+  return (
+    <div className="h-screen bg-indigo-600 flex items-center justify-center p-6">
+      <Card className="w-full max-w-md p-8">
+        <h1 className="text-3xl font-black text-center text-indigo-600 mb-8 uppercase tracking-tighter">Join Class</h1>
+        
+        <div className="space-y-6">
+          {step === 'pin' ? (
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Game PIN</label>
+              <input 
+                className="w-full h-16 text-center text-4xl font-black tracking-widest border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:ring-0"
+                maxLength={6}
+                value={pin}
+                onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                placeholder="000000"
+              />
+            </div>
+          ) : (
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Вашето Име</label>
+              <input 
+                className="w-full h-16 text-center text-2xl font-bold border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:ring-0"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Име"
+                autoFocus
+              />
+            </div>
+          )}
+
+          {error && <p className="text-red-500 text-sm text-center">{error}</p>}
+
+          <Button className="w-full h-16 text-xl" onClick={handleJoin}>
+            {step === 'pin' ? 'Напред' : 'Влез в играта'}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
+const StudentView = () => {
+  const [searchParams] = useSearchParams();
+  const [currentSlide, setCurrentSlide] = useState<any>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [status, setStatus] = useState<'connecting' | 'waiting' | 'active' | 'closed'>('connecting');
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [openAnswer, setOpenAnswer] = useState('');
+  const [presentationData, setPresentationData] = useState<Presentation | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [feedback, setFeedback] = useState<{ isCorrect: boolean, pointsEarned: number, totalScore: number } | null>(null);
+  const [finalLeaderboard, setFinalLeaderboard] = useState<any[] | null>(null);
+  const [finalScore, setFinalScore] = useState<number | null>(null);
+  const [showStudentLeaderboard, setShowStudentLeaderboard] = useState(false);
+  const timerRef = useRef<any>(null);
+  const ws = useRef<WebSocket | null>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (timeLeft !== null && timeLeft > 0) {
+      timerRef.current = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
+    } else if (timeLeft === 0) {
+      setSubmitted(true);
+    }
+    return () => clearTimeout(timerRef.current);
+  }, [timeLeft]);
+
+  useEffect(() => {
+    const pin = searchParams.get('pin');
+    const name = searchParams.get('name');
+
+    if (!pin || !name) {
+      navigate('/join');
+      return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws.current = new WebSocket(`${protocol}//${window.location.host}`);
+
+    ws.current.onopen = () => {
+      setIsConnected(true);
+      ws.current?.send(JSON.stringify({ type: 'JOIN_ROOM', pin, name }));
+    };
+
+    ws.current.onclose = () => setIsConnected(false);
+
+    ws.current.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      switch (msg.type) {
+        case 'JOIN_SUCCESS':
+          setStatus('waiting');
+          if (msg.presentation) setPresentationData(msg.presentation);
+          if (msg.avatarSeed) localStorage.setItem('avatarSeed', msg.avatarSeed);
+          break;
+        case 'ERROR':
+          alert(msg.message);
+          navigate('/join');
+          break;
+        case 'SLIDE_UPDATE':
+          if (msg.slide) {
+            setCurrentSlide(msg.slide);
+            setSubmitted(false);
+            setFeedback(null);
+            setShowStudentLeaderboard(false);
+            setMultiResponses([]);
+            setMatchingConnections({});
+            setSelectedLeft(null);
+            setStatus('active');
+          } else {
+            setStatus('waiting');
+          }
+          break;
+        case 'SHOW_LEADERBOARD':
+          setShowStudentLeaderboard(msg.show);
+          if (msg.show) {
+            setFinalScore(msg.yourScore);
+            setFinalLeaderboard(msg.leaderboard);
+          }
+          break;
+        case 'FEEDBACK':
+          setFeedback({
+            isCorrect: msg.isCorrect,
+            pointsEarned: msg.pointsEarned,
+            totalScore: msg.totalScore
+          });
+          break;
+        case 'PRESENTATION_FINISHED':
+          setFinalLeaderboard(msg.leaderboard);
+          setFinalScore(msg.yourScore);
+          setStatus('closed');
+          break;
+        case 'ROOM_CLOSED':
+          setStatus('closed');
+          break;
+      }
+    };
+
+    return () => ws.current?.close();
+  }, [searchParams, navigate]);
+
+  const [multiResponses, setMultiResponses] = useState<number[]>([]);
+  const [matchingConnections, setMatchingConnections] = useState<Record<string, string>>({});
+  const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
+
+  const submitResponse = (response: any) => {
+    ws.current?.send(JSON.stringify({ type: 'SUBMIT_RESPONSE', response }));
+    setSubmitted(true);
+  };
+
+  const toggleMulti = (idx: number) => {
+    setMultiResponses(prev => 
+      prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
+    );
+  };
+
+  const [labelPositions, setLabelPositions] = useState<Record<string, { x: number, y: number }>>({});
+  const [shuffledRightItems, setShuffledRightItems] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (currentSlide?.type === 'labeling') {
+      setLabelPositions({});
+    }
+    if (currentSlide?.type === 'matching' && currentSlide.content.pairs) {
+      const items = currentSlide.content.pairs.map((p: any) => ({ id: p.id, text: p.right }));
+      // Fisher-Yates shuffle
+      for (let i = items.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [items[i], items[j]] = [items[j], items[i]];
+      }
+      setShuffledRightItems(items);
+    }
+  }, [currentSlide]);
+
+  if (status === 'closed') {
+    return (
+      <div className="h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-8 text-center">
+        <motion.div 
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="bg-white/10 backdrop-blur-xl p-12 rounded-[3rem] border border-white/20 shadow-2xl max-w-lg w-full"
+        >
+          <Trophy className="w-24 h-24 mb-6 text-yellow-400 mx-auto" />
+          <h1 className="text-4xl font-black mb-2">Край на урока!</h1>
+          <p className="text-indigo-200 text-xl mb-8">Страхотна работа!</p>
+          
+          <div className="bg-indigo-600/50 p-8 rounded-3xl mb-12">
+            <div className="text-sm font-bold text-indigo-200 uppercase tracking-widest mb-2">Твоят резултат</div>
+            <div className="text-6xl font-black">{finalScore || 0}</div>
+            <div className="text-indigo-200 mt-2 font-bold">точки</div>
+          </div>
+
+          {finalLeaderboard && (
+            <div className="space-y-3 text-left mb-8">
+              <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest mb-4">Топ 3 в класа</h3>
+              {finalLeaderboard.slice(0, 3).map((s, i) => (
+                <div key={i} className="flex items-center justify-between p-4 bg-white/5 rounded-2xl border border-white/10">
+                  <div className="flex items-center gap-3">
+                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${i === 0 ? 'bg-yellow-400 text-yellow-900' : i === 1 ? 'bg-gray-300 text-gray-800' : 'bg-orange-400 text-orange-900'}`}>
+                      {i + 1}
+                    </span>
+                    <span className="font-bold">{s.name}</span>
+                  </div>
+                  <span className="font-black text-indigo-400">{s.score}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <Button className="w-full h-16 text-xl" onClick={() => navigate('/join')}>Към началната страница</Button>
+        </motion.div>
+      </div>
+    );
+  }
+
+  if (status === 'connecting') {
+    return (
+      <div className="h-screen bg-indigo-600 text-white flex flex-col items-center justify-center p-8 text-center">
+        <Loader2 className="w-16 h-16 animate-spin mb-6" />
+        <h1 className="text-3xl font-bold mb-2">Свързване...</h1>
+      </div>
+    );
+  }
+
+  if (status === 'waiting') {
+    return (
+      <div className="h-screen bg-indigo-600 text-white flex flex-col items-center justify-center p-8 text-center">
+        <Loader2 className="w-16 h-16 animate-spin mb-6 opacity-50" />
+        <h1 className="text-3xl font-bold mb-2">Готови ли сте?</h1>
+        <p className="text-indigo-200">Изчакайте учителя да започне презентацията...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-screen bg-gray-50 flex flex-col">
+      {presentationData?.globalBackgroundImage && (
+        <div 
+          className="fixed inset-0 opacity-10 pointer-events-none"
+          style={{ backgroundImage: `url(${presentationData.globalBackgroundImage})`, backgroundSize: 'cover' }}
+        />
+      )}
+      <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center relative z-10">
+        <div className="flex items-center gap-3">
+          <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500 animate-pulse'}`} />
+          <img src={getAvatarUrl(localStorage.getItem('avatarSeed') || searchParams.get('name') || 'user')} className="w-8 h-8" alt="avatar" />
+          <span className="font-bold text-indigo-600">{searchParams.get('name')}</span>
+          {timeLeft !== null && (
+            <div className={`text-lg font-black ${timeLeft < 10 ? 'text-red-500' : 'text-indigo-600'}`}>
+              {timeLeft}s
+            </div>
+          )}
+        </div>
+        <div className="bg-gray-100 px-3 py-1 rounded-full text-xs font-bold text-gray-500 uppercase">В сесия</div>
+      </header>
+
+      <main className="flex-1 p-6 flex flex-col overflow-y-auto relative z-10 transition-colors"
+        style={{ backgroundColor: currentSlide.content.backgroundColor || '#ffffff' }}
+      >
+        {presentationData?.globalBackgroundImage && (
+          <div 
+            className="absolute inset-0 opacity-15 pointer-events-none"
+            style={{ backgroundImage: `url(${presentationData.globalBackgroundImage})`, backgroundSize: 'cover' }}
+          />
+        )}
+
+        {showStudentLeaderboard ? (
+          <div className="flex-1 flex flex-col items-center justify-center">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white p-8 rounded-[3rem] shadow-2xl border border-gray-100 max-w-md w-full text-center"
+            >
+              <Award className="w-20 h-20 text-yellow-500 mx-auto mb-6" />
+              <h2 className="text-3xl font-black mb-2 text-gray-900 uppercase tracking-tighter">Твоят резултат</h2>
+              <div className="text-6xl font-black text-indigo-600 mb-8">{finalScore || 0}</div>
+              
+              {finalLeaderboard && (
+                <div className="space-y-3 text-left">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Топ в класа</h3>
+                  {finalLeaderboard.slice(0, 3).map((s, i) => (
+                    <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                      <div className="flex items-center gap-3">
+                        <span className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ${i === 0 ? 'bg-yellow-400 text-yellow-900' : 'bg-gray-200 text-gray-600'}`}>
+                          {i + 1}
+                        </span>
+                        <span className="font-bold text-gray-700">{s.name}</span>
+                      </div>
+                      <span className="font-black text-indigo-600">{s.score}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          </div>
+        ) : (
+          <>
+            <h1 
+              className="font-bold text-center mb-8 relative z-20"
+              style={{ 
+                fontSize: `${currentSlide.content.titleSize ? currentSlide.content.titleSize / 1.5 : 24}px`,
+                color: currentSlide.content.titleColor || '#000000'
+              }}
+            >
+              {currentSlide.content.title}
+            </h1>
+
+            <div className="flex-1 flex flex-col relative z-20">
+              {['title', 'text-image', 'video'].includes(currentSlide.type) ? (
+            <div className="flex-1 flex items-center justify-center text-center text-gray-500">
+            <div className="flex flex-col items-center gap-4">
+              <Layout className="w-12 h-12 opacity-20" />
+              <p className="text-lg italic">Вижте екрана на учителя за съдържанието.</p>
+            </div>
+          </div>
+        ) : (currentSlide.type === 'quiz-single' || currentSlide.type === 'boolean') ? (
+          <div className="grid grid-cols-1 gap-4 flex-1">
+            {currentSlide.content.options.map((opt: any, i: number) => (
+              <button
+                key={i}
+                disabled={submitted}
+                onClick={() => submitResponse(i)}
+                className={`h-20 text-xl font-bold rounded-2xl border-b-4 transition-all active:translate-y-1 active:border-b-0 ${
+                  submitted 
+                    ? 'bg-gray-100 border-gray-200 text-gray-400' 
+                    : 'bg-white border-gray-200 hover:bg-indigo-50 hover:border-indigo-200 text-gray-800 shadow-sm'
+                }`}
+              >
+                {opt.text}
+              </button>
+            ))}
+          </div>
+        ) : currentSlide.type === 'quiz-multi' ? (
+          <div className="flex flex-col gap-4 flex-1">
+            <div className="grid grid-cols-1 gap-4">
+              {currentSlide.content.options.map((opt: any, i: number) => (
+                <button
+                  key={i}
+                  disabled={submitted}
+                  onClick={() => toggleMulti(i)}
+                  className={`h-20 text-xl font-bold rounded-2xl border-b-4 transition-all ${
+                    submitted 
+                      ? 'bg-gray-100 border-gray-200 text-gray-400' 
+                      : multiResponses.includes(i)
+                        ? 'bg-indigo-600 border-indigo-800 text-white'
+                        : 'bg-white border-gray-200 text-gray-800 shadow-sm'
+                  }`}
+                >
+                  {opt.text}
+                </button>
+              ))}
+            </div>
+            {!submitted && (
+              <Button 
+                className="h-16 text-xl mt-4" 
+                onClick={() => submitResponse(multiResponses)}
+                disabled={multiResponses.length === 0}
+              >
+                Изпрати отговорите
+              </Button>
+            )}
+          </div>
+        ) : currentSlide.type === 'hotspot' ? (
+          <div className="flex-1 flex flex-col gap-4">
+            <p className="text-center text-gray-500 font-medium">Докоснете вярната област на картинката</p>
+            <div className="relative flex-1 bg-white rounded-3xl border-2 border-gray-200 overflow-hidden">
+              {currentSlide.content.imageUrl && (
+                <img 
+                  src={currentSlide.content.imageUrl} 
+                  className="w-full h-full object-contain" 
+                  alt="Hotspot"
+                  onClick={(e) => {
+                    if (submitted) return;
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const x = ((e.clientX - rect.left) / rect.width) * 100;
+                    const y = ((e.clientY - rect.top) / rect.height) * 100;
+                    submitResponse({ x, y });
+                  }}
+                />
+              )}
+            </div>
+          </div>
+        ) : currentSlide.type === 'open-question' ? (
+          <div className="flex-1 flex flex-col gap-4">
+            <textarea 
+              disabled={submitted}
+              className="flex-1 p-6 text-xl border-2 border-gray-200 rounded-3xl focus:border-indigo-500 focus:ring-0 resize-none"
+              placeholder={currentSlide.content.placeholder || "Напишете вашия отговор тук..."}
+              value={openAnswer}
+              onChange={e => setOpenAnswer(e.target.value)}
+            />
+            {!submitted && (
+              <Button 
+                className="h-16 text-xl" 
+                onClick={() => submitResponse(openAnswer)}
+                disabled={!openAnswer.trim()}
+              >
+                Изпрати отговора
+              </Button>
+            )}
+          </div>
+        ) : currentSlide.type === 'whiteboard' ? (
+          <div className="flex-1 flex flex-col gap-4">
+            <div className="flex-1 bg-white rounded-3xl border-2 border-gray-200 relative overflow-hidden">
+              {currentSlide.content.imageUrl && (
+                <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-30" alt="BG" />
+              )}
+              <canvas 
+                className="absolute inset-0 w-full h-full cursor-crosshair touch-none"
+                onPointerDown={(e) => {
+                  const canvas = e.currentTarget;
+                  const rect = canvas.getBoundingClientRect();
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  
+                  // Set canvas internal resolution if not set
+                  if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+                    canvas.width = canvas.clientWidth;
+                    canvas.height = canvas.clientHeight;
+                  }
+
+                  ctx.beginPath();
+                  ctx.lineWidth = 3;
+                  ctx.lineCap = 'round';
+                  ctx.strokeStyle = '#4f46e5';
+                  ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+                  (canvas as any).isDrawing = true;
+                }}
+                onPointerMove={(e) => {
+                  const canvas = e.currentTarget;
+                  if (!(canvas as any).isDrawing) return;
+                  const rect = canvas.getBoundingClientRect();
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+                  ctx.stroke();
+                }}
+                onPointerUp={(e) => {
+                  (e.currentTarget as any).isDrawing = false;
+                }}
+              />
+            </div>
+            {!submitted && (
+              <Button className="h-16 text-xl" onClick={() => submitResponse('drawn')}>
+                Изпрати рисунката
+              </Button>
+            )}
+          </div>
+        ) : currentSlide.type === 'matching' ? (
+          <div className="flex-1 flex flex-col gap-6">
+            <p className="text-center text-gray-500 font-medium">Свържете двойките, като изберете елемент отляво и след това отдясно</p>
+            
+            <div className="flex-1 grid grid-cols-2 gap-8 relative">
+              {/* Left Column */}
+              <div className="space-y-3">
+                {currentSlide.content.pairs?.map((pair: any) => (
+                  <button
+                    key={`left-${pair.id}`}
+                    disabled={submitted}
+                    onClick={() => setSelectedLeft(pair.id)}
+                    className={`w-full p-4 rounded-xl border-2 font-bold transition-all ${
+                      selectedLeft === pair.id 
+                        ? 'border-indigo-600 bg-indigo-50 shadow-md' 
+                        : matchingConnections[pair.id]
+                          ? 'border-green-200 bg-green-50 text-green-700'
+                          : 'border-gray-200 bg-white hover:border-indigo-300'
+                    }`}
+                  >
+                    {pair.left}
+                  </button>
+                ))}
+              </div>
+
+              {/* Right Column */}
+              <div className="space-y-3">
+                {shuffledRightItems.map((item: any) => {
+                  const isConnected = Object.values(matchingConnections).includes(item.id);
+                  const connectedToId = Object.keys(matchingConnections).find(key => matchingConnections[key] === item.id);
+
+                  return (
+                    <button
+                      key={`right-${item.id}`}
+                      disabled={submitted || !selectedLeft}
+                      onClick={() => {
+                        if (!selectedLeft) return;
+                        setMatchingConnections(prev => ({ ...prev, [selectedLeft]: item.id }));
+                        setSelectedLeft(null);
+                      }}
+                      className={`w-full p-4 rounded-xl border-2 font-bold transition-all ${
+                        isConnected 
+                          ? 'border-green-500 bg-green-600 text-white shadow-lg' 
+                          : 'border-gray-200 bg-white hover:border-indigo-300'
+                      }`}
+                    >
+                      {item.text}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Reset Button */}
+              {!submitted && Object.keys(matchingConnections).length > 0 && (
+                <button 
+                  className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-xs font-bold text-indigo-600 hover:underline"
+                  onClick={() => {
+                    setMatchingConnections({});
+                    setSelectedLeft(null);
+                  }}
+                >
+                  Изчисти връзките
+                </button>
+              )}
+            </div>
+
+            {!submitted && (
+              <Button 
+                className="h-16 text-xl" 
+                onClick={() => submitResponse(matchingConnections)}
+                disabled={Object.keys(matchingConnections).length < (currentSlide.content.pairs?.length || 0)}
+              >
+                Изпрати отговорите
+              </Button>
+            )}
+          </div>
+        ) : currentSlide.type === 'labeling' ? (
+          <div className="flex-1 flex flex-col gap-6">
+            <p className="text-center text-gray-500 font-medium">Поставете етикетите в правилните зони</p>
+            
+            {/* Label Tray */}
+            {!submitted && (
+              <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-wrap gap-3 justify-center">
+                {currentSlide.content.labels?.filter((l: any) => !labelPositions[l.id]).map((label: any) => (
+                  <div 
+                    key={`tray-${label.id}`}
+                    className="bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100 font-bold text-indigo-600 cursor-pointer hover:bg-indigo-100 transition-colors"
+                    onClick={() => {
+                      // Initial placement in center if clicked
+                      setLabelPositions(prev => ({ ...prev, [label.id]: { x: 50, y: 50 } }));
+                    }}
+                  >
+                    {label.text}
+                  </div>
+                ))}
+                {currentSlide.content.labels?.every((l: any) => labelPositions[l.id]) && (
+                  <p className="text-xs text-gray-400 italic">Всички етикети са на терена. Можете да ги местите.</p>
+                )}
+              </div>
+            )}
+
+            <div 
+              id="student-label-container"
+              className="relative flex-1 bg-gray-100 rounded-3xl overflow-hidden border-2 border-gray-200 min-h-[400px]"
+            >
+              {currentSlide.content.imageUrl && (
+                <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-60" alt="BG" />
+              )}
+              
+              {/* Drop Zones */}
+              <div className="absolute inset-0 pointer-events-none">
+                {currentSlide.content.labels?.map((label: any) => (
+                  <div 
+                    key={`zone-${label.id}`}
+                    className="absolute border-2 border-dashed border-white bg-white/40 rounded-lg flex items-center justify-center"
+                    style={{
+                      left: `${label.x}%`,
+                      top: `${label.y}%`,
+                      width: '100px',
+                      height: '40px',
+                      transform: 'translate(-50%, -50%)'
+                    }}
+                  >
+                    <div className="w-1 h-1 bg-white rounded-full" />
+                  </div>
+                ))}
+              </div>
+
+              <div className="absolute inset-0">
+                {currentSlide.content.labels?.map((label: any, idx: number) => {
+                  const pos = labelPositions[label.id];
+                  if (!pos) return null;
+
+                  return (
+                    <motion.div
+                      key={label.id}
+                      drag={!submitted}
+                      dragMomentum={false}
+                      onDragEnd={(_, info) => {
+                        const container = document.getElementById('student-label-container');
+                        if (container) {
+                          const rect = container.getBoundingClientRect();
+                          const x = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
+                          const y = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                          setLabelPositions(prev => ({ ...prev, [label.id]: { x, y } }));
+                        }
+                      }}
+                      className="absolute cursor-grab active:cursor-grabbing bg-white px-4 py-2 rounded-lg shadow-xl border-2 border-indigo-500 font-bold text-indigo-600 z-10 min-w-[100px] text-center"
+                      style={{ 
+                        left: `${pos.x}%`, 
+                        top: `${pos.y}%`,
+                        transform: 'translate(-50%, -50%)'
+                      }}
+                    >
+                      {label.text}
+                    </motion.div>
+                  );
+                })}
+              </div>
+            </div>
+            {!submitted && (
+              <Button 
+                className="h-16 text-xl" 
+                onClick={() => submitResponse(labelPositions)}
+                disabled={Object.keys(labelPositions).length < (currentSlide.content.labels?.length || 0)}
+              >
+                Готово
+              </Button>
+            )}
+          </div>
+        ) : null}
+        </div>
+          </>
+        )}
+
+        {submitted && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ scale: 0.8, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white p-8 rounded-[2.5rem] shadow-2xl flex flex-col items-center gap-6 text-center max-w-xs w-full"
+            >
+              {feedback ? (
+                <>
+                  {feedback.isCorrect ? (
+                    <>
+                      <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center text-green-600">
+                        <CheckCircle2 className="w-12 h-12" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-black text-green-600">Вярно!</h3>
+                        <p className="text-gray-500 font-bold">+{feedback.pointsEarned} точки</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center text-red-600">
+                        <XCircle className="w-12 h-12" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-black text-red-600">Грешно</h3>
+                        <p className="text-gray-500 font-bold">Опитай пак следващия път!</p>
+                      </div>
+                    </>
+                  )}
+                  <div className="w-full h-px bg-gray-100 my-2" />
+                  <div className="text-sm font-bold text-gray-400 uppercase tracking-widest">Общ резултат</div>
+                  <div className="text-3xl font-black text-indigo-600">{feedback.totalScore}</div>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="w-12 h-12 text-indigo-600 animate-spin" />
+                  <span className="text-xl font-bold">Отговорът е изпратен!</span>
+                </>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+export default function App() {
+  const [user, setUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('teacher_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const handleLogin = (user: User) => {
+    setUser(user);
+    localStorage.setItem('teacher_user', JSON.stringify(user));
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('teacher_user');
+  };
+
+  if (!user) {
+    return (
+      <Router>
+        <div className="min-h-screen bg-slate-50 font-sans text-gray-900">
+          <Routes>
+            <Route path="/join" element={<StudentJoin />} />
+            <Route path="/play" element={<StudentView />} />
+            <Route path="*" element={<Auth onLogin={handleLogin} />} />
+          </Routes>
+        </div>
+      </Router>
+    );
+  }
+
+  return (
+    <Router>
+      <div className="min-h-screen bg-slate-50 font-sans text-gray-900">
+        <Routes>
+          <Route path="/reports" element={<ReportsDashboard user={user} />} />
+          <Route path="/reports/:id" element={<ReportDetail user={user} />} />
+          <Route path="/" element={<Dashboard user={user} onLogout={handleLogout} />} />
+          <Route path="/edit/:id" element={<Editor user={user} />} />
+          <Route path="/host/:id" element={<HostView user={user} />} />
+          <Route path="/join" element={<StudentJoin />} />
+          <Route path="/play" element={<StudentView />} />
+        </Routes>
+      </div>
+    </Router>
+  );
+}
