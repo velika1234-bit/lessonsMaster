@@ -433,7 +433,7 @@ const ReportsDashboard = ({ user }: { user: User }) => {
     }
     const q = query(collection(db, 'reports'), where('teacherId', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
       // Sort in memory to avoid index requirements
       data.sort((a, b) => {
         const dateA = a.createdAt?.toDate?.() || 0;
@@ -450,6 +450,10 @@ const ReportsDashboard = ({ user }: { user: User }) => {
   }, [user.id]);
 
   const deleteReport = async (id: string) => {
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна.');
+      return;
+    }
     if (!confirm('Сигурни ли сте, че искате да изтриете този доклад?')) return;
     await deleteDoc(doc(db, 'reports', id));
   };
@@ -522,7 +526,7 @@ const ReportDetail = ({ user }: { user: User }) => {
     const docRef = doc(db, 'reports', id!);
     getDoc(docRef).then(docSnap => {
       if (docSnap.exists()) {
-        setReport({ id: docSnap.id, ...docSnap.data() });
+        setReport({ ...docSnap.data(), id: docSnap.id });
       }
       setLoading(false);
     }).catch(err => {
@@ -711,7 +715,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
     }
     const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Presentation));
       // Sort in memory to avoid index requirements
       data.sort((a: any, b: any) => {
         const dateA = a.updatedAt?.toDate?.() || 0;
@@ -728,6 +732,10 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   }, [user.id]);
 
   const createNew = async () => {
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна. Моля, проверете настройките на Firebase.');
+      return;
+    }
     const docRef = await addDoc(collection(db, 'presentations'), {
       title: 'Нова презентация',
       teacherId: user.id,
@@ -813,7 +821,9 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    if (auth) {
+      await signOut(auth);
+    }
     onLogout();
   };
 
@@ -946,7 +956,7 @@ const Editor = ({ user }: { user: User }) => {
   const fetchOtherPresentations = async () => {
     const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
     const snapshot = await getDocs(q);
-    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
+    const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Presentation));
     setOtherPresentations(data.filter((p: any) => p.id !== id));
   };
 
@@ -1106,7 +1116,7 @@ const Editor = ({ user }: { user: User }) => {
     const docRef = doc(db, 'presentations', id!);
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
+        const data = { ...docSnap.data(), id: docSnap.id } as Presentation;
         if (data.slides) {
           data.slides = data.slides.map((s: any) => {
             if (s.type === 'matching' && !s.content.pairs) {
@@ -2145,7 +2155,7 @@ const HostView = ({ user }: { user: User }) => {
       const docRef = doc(db, 'presentations', id);
       getDoc(docRef).then(docSnap => {
         if (docSnap.exists()) {
-          const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
+          const data = { ...docSnap.data(), id: docSnap.id } as Presentation;
           if (data.slides) {
             data.slides = data.slides.map((s: any) => {
               if (s.type === 'matching' && !s.content.pairs) {
