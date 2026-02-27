@@ -450,6 +450,10 @@ const ReportsDashboard = ({ user }: { user: User }) => {
   }, [user.id]);
 
   const deleteReport = async (id: string) => {
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна.');
+      return;
+    }
     if (!confirm('Сигурни ли сте, че искате да изтриете този доклад?')) return;
     await deleteDoc(doc(db, 'reports', id));
   };
@@ -728,6 +732,10 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   }, [user.id]);
 
   const createNew = async () => {
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна. Моля, проверете настройките на Firebase.');
+      return;
+    }
     const docRef = await addDoc(collection(db, 'presentations'), {
       title: 'Нова презентация',
       teacherId: user.id,
@@ -813,7 +821,9 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    if (auth) {
+      await signOut(auth);
+    }
     onLogout();
   };
 
