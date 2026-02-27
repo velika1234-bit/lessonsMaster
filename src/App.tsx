@@ -37,9 +37,10 @@ import {
   Settings,
   XCircle,
   Trophy,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Chrome
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   BrowserRouter as Router, 
   Routes, 
@@ -52,6 +53,32 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { auth, db } from './lib/firebase';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  signInWithPopup, 
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  signOut,
+  updateProfile
+} from 'firebase/auth';
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot,
+  orderBy,
+  serverTimestamp,
+  increment
+} from 'firebase/firestore';
 
 // --- Helpers ---
 const getAvatarUrl = (seed: string) => `https://robohash.org/${seed}?set=set4&bgset=bg1`;
@@ -140,6 +167,30 @@ interface User {
   name: string;
 }
 
+// --- Global API Key Management ---
+let globalGeminiApiKey = (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
+
+const fetchConfig = async () => {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    if (data.geminiApiKey) {
+      globalGeminiApiKey = data.geminiApiKey;
+    }
+  } catch (err) {
+    console.error("Failed to fetch config:", err);
+  }
+};
+
+fetchConfig();
+
+const getAIInstance = () => {
+  const key = globalGeminiApiKey || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || (typeof process !== 'undefined' ? process.env.API_KEY : '');
+  if (!key) return null;
+  // Always create a new instance to use the latest key from the environment
+  return new GoogleGenAI({ apiKey: key });
+};
+
 interface Presentation {
   id: string;
   title: string;
@@ -150,7 +201,7 @@ interface Presentation {
 
 // --- Components ---
 
-const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false }: any) => {
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false, title }: any) => {
   const base = "px-6 py-3 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-sm";
   const variants: any = {
     primary: "bg-indigo-500 text-white hover:bg-indigo-600 shadow-lg shadow-indigo-100",
@@ -164,6 +215,7 @@ const Button = ({ children, onClick, variant = 'primary', className = '', disabl
       onClick={onClick} 
       disabled={disabled || loading}
       className={`${base} ${variants[variant]} ${className}`}
+      title={title}
     >
       {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : children}
     </button>
@@ -186,48 +238,86 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleGoogleLogin = async () => {
+  const handleGoogleSignIn = async () => {
+    setError('');
+    
+    if (!auth) {
+      setError('Firebase не е конфигуриран. Моля, добавете API ключовете.');
+      return;
+    }
+
+    setLoading(true);
+    const provider = new GoogleAuthProvider();
     try {
-      const res = await fetch('/api/auth/google/url');
-      const { url } = await res.json();
-      window.open(url, 'google_login', 'width=500,height=600');
-    } catch (err) {
-      setError('Грешка при стартиране на Google вход');
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+      const userData = {
+        id: user.uid,
+        email: user.email || '',
+        name: user.displayName || 'Учител'
+      };
+      
+      await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
+      onLogin(userData);
+    } catch (err: any) {
+      console.error("Google Auth Error:", err);
+      if (err.code === 'auth/operation-not-allowed') {
+        setError('Google входът не е активиран във Firebase Console (Authentication > Sign-in method)');
+      } else if (err.code === 'auth/popup-blocked') {
+        setError('Браузърът блокира изскачащия прозорец. Моля, разрешете го.');
+      } else {
+        setError(`Грешка при Google вход: ${err.message || err.code}`);
+      }
+    } finally {
+      setLoading(false);
     }
   };
-
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        onLogin(event.data.user);
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [onLogin]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (!auth) {
+      setError('Firebase не е конфигуриран. Моля, добавете API ключовете в настройките на проекта.');
+      return;
+    }
+
     setLoading(true);
 
-    const endpoint = isLogin ? '/api/auth/login' : '/api/auth/register';
-    const body = isLogin ? { email, password } : { email, password, name };
-
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        onLogin(data);
+      if (isLogin) {
+        const result = await signInWithEmailAndPassword(auth, email, password);
+        const user = result.user;
+        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const userData = userDoc.exists() 
+          ? userDoc.data() as User 
+          : { id: user.uid, email: user.email || '', name: user.displayName || 'Учител' };
+        onLogin(userData);
       } else {
-        setError(data.error || 'Възникна грешка');
+        const result = await createUserWithEmailAndPassword(auth, email, password);
+        const user = result.user;
+        await updateProfile(user, { displayName: name });
+        const userData = {
+          id: user.uid,
+          email: user.email || '',
+          name: name
+        };
+        await setDoc(doc(db, 'users', user.uid), userData);
+        onLogin(userData);
       }
-    } catch (err) {
-      setError('Грешка при свързване със сървъра');
+    } catch (err: any) {
+      console.error("Auth Error:", err);
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('Невалиден имейл или парола');
+      } else if (err.code === 'auth/email-already-in-use') {
+        setError('Този имейл вече се използва');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Паролата трябва да е поне 6 символа');
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError('Методът за вход не е активиран във Firebase Console (Authentication > Sign-in method)');
+      } else {
+        setError(`Грешка: ${err.message || err.code || 'Възникна проблем при аутентикация'}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -235,11 +325,7 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-slate-200/50 p-10 border border-white"
-      >
+      <div className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-slate-200/50 p-10 border border-white">
         <div className="text-center mb-10">
           <div className="w-20 h-20 bg-indigo-500 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-2xl shadow-indigo-100">
             <Monitor className="text-white w-10 h-10" />
@@ -252,6 +338,24 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
               ? 'Вашите презентации се пазят сигурно в облака и са достъпни от всеки компютър.' 
               : 'Регистрирайте се, за да достъпвате уроците си от всяко място.'}
           </p>
+        </div>
+
+        <div className="space-y-4 mb-8">
+          <Button 
+            variant="secondary" 
+            className="w-full h-14 rounded-2xl border-2 border-slate-100 hover:bg-slate-50"
+            onClick={handleGoogleSignIn}
+            disabled={loading}
+          >
+            <Chrome className="w-5 h-5 text-indigo-500" />
+            Влез с Google
+          </Button>
+          
+          <div className="relative flex items-center py-2">
+            <div className="flex-grow border-t border-slate-100"></div>
+            <span className="flex-shrink mx-4 text-slate-300 text-[10px] font-black uppercase tracking-widest">или</span>
+            <div className="flex-grow border-t border-slate-100"></div>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -292,48 +396,25 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
           </div>
 
           {error && (
-            <motion.div 
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              className="p-4 bg-rose-50 text-rose-500 text-xs font-bold rounded-2xl border border-rose-100"
-            >
+            <div className="p-4 bg-rose-50 text-rose-500 text-xs font-bold rounded-2xl border border-rose-100">
               {error}
-            </motion.div>
+            </div>
           )}
 
           <Button className="w-full py-4 text-lg" loading={loading}>
             {isLogin ? 'Вход' : 'Регистрация'}
-          </Button>
-
-          <div className="relative my-8">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-100"></div>
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-white px-4 text-slate-400 font-bold">или</span>
-            </div>
-          </div>
-
-          <Button 
-            type="button"
-            variant="secondary" 
-            className="w-full py-4 border-slate-200 text-slate-600 hover:bg-slate-50"
-            onClick={handleGoogleLogin}
-          >
-            <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="Google" />
-            Вход с Google
           </Button>
         </form>
 
         <div className="mt-8 text-center">
           <button 
             onClick={() => setIsLogin(!isLogin)}
-            className="text-indigo-400 font-bold text-sm hover:text-indigo-600 transition-colors"
+            className="text-indigo-500 font-bold text-sm hover:underline"
           >
-            {isLogin ? 'Нямате акаунт? Регистрирайте се' : 'Вече имате акаунт? Влезте'}
+            {isLogin ? 'Нямате профил? Регистрирайте се' : 'Вече имате профил? Влезте'}
           </button>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 };
@@ -346,23 +427,31 @@ const ReportsDashboard = ({ user }: { user: User }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/reports', {
-      headers: { 'teacher-id': user.id }
-    })
-      .then(res => res.json())
-      .then(data => {
-        setReports(data);
-        setLoading(false);
+    if (!db) {
+      setLoading(false);
+      return;
+    }
+    const q = query(collection(db, 'reports'), where('teacherId', '==', user.id));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      // Sort in memory to avoid index requirements
+      data.sort((a, b) => {
+        const dateA = a.createdAt?.toDate?.() || 0;
+        const dateB = b.createdAt?.toDate?.() || 0;
+        return dateB - dateA;
       });
+      setReports(data);
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching reports:", error);
+      setLoading(false);
+    });
+    return () => unsubscribe();
   }, [user.id]);
 
   const deleteReport = async (id: string) => {
     if (!confirm('Сигурни ли сте, че искате да изтриете този доклад?')) return;
-    await fetch(`/api/reports/${id}`, { 
-      method: 'DELETE',
-      headers: { 'teacher-id': user.id }
-    });
-    setReports(reports.filter(r => r.id !== id));
+    await deleteDoc(doc(db, 'reports', id));
   };
 
   return (
@@ -390,13 +479,13 @@ const ReportsDashboard = ({ user }: { user: User }) => {
                   <History className="w-6 h-6" />
                 </div>
                 <div className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">
-                  {new Date(report.created_at).toLocaleDateString('bg-BG')}
+                  {report.createdAt?.toDate ? report.createdAt.toDate().toLocaleDateString('bg-BG') : '...'}
                 </div>
               </div>
-              <h3 className="text-xl font-black text-gray-900 mb-2 line-clamp-1">{report.presentation_title}</h3>
+              <h3 className="text-xl font-black text-gray-900 mb-2 line-clamp-1">{report.presentationTitle}</h3>
               <div className="flex items-center gap-4 text-xs font-bold text-gray-400 mb-6">
-                <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {report.data.students.length}</span>
-                <span className="flex items-center gap-1 text-emerald-400"><Award className="w-3 h-3" /> {Math.max(...report.data.students.map((s: any) => s.score), 0)} макс.</span>
+                <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {report.data?.students?.length || 0}</span>
+                <span className="flex items-center gap-1 text-emerald-400"><Award className="w-3 h-3" /> {report.data?.students ? Math.max(...report.data.students.map((s: any) => s.score), 0) : 0} макс.</span>
               </div>
               <div className="flex gap-2">
                 <Button variant="primary" className="flex-1" onClick={() => navigate(`/reports/${report.id}`)}>
@@ -422,15 +511,25 @@ const ReportsDashboard = ({ user }: { user: User }) => {
 const ReportDetail = ({ user }: { user: User }) => {
   const { id } = useParams();
   const [report, setReport] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch(`/api/reports/${id}`, {
-      headers: { 'teacher-id': user.id }
-    })
-      .then(res => res.json())
-      .then(setReport);
-  }, [id, user.id]);
+    if (!db) {
+      setLoading(false);
+      return;
+    }
+    const docRef = doc(db, 'reports', id!);
+    getDoc(docRef).then(docSnap => {
+      if (docSnap.exists()) {
+        setReport({ id: docSnap.id, ...docSnap.data() });
+      }
+      setLoading(false);
+    }).catch(err => {
+      console.error("Error fetching report:", err);
+      setLoading(false);
+    });
+  }, [id]);
 
   const downloadPDF = async () => {
     const doc = new jsPDF();
@@ -453,10 +552,11 @@ const ReportDetail = ({ user }: { user: User }) => {
     doc.text("Отчет от презентация", 105, 20, { align: "center" });
     
     doc.setFontSize(16);
-    doc.text(report.presentation_title, 105, 30, { align: "center" });
+    doc.text(report.presentationTitle || 'Без заглавие', 105, 30, { align: "center" });
     
     doc.setFontSize(12);
-    doc.text(`Дата: ${new Date(report.created_at).toLocaleDateString('bg-BG')}`, 20, 45);
+    const dateStr = report.createdAt?.toDate ? report.createdAt.toDate().toLocaleDateString('bg-BG') : '...';
+    doc.text(`Дата: ${dateStr}`, 20, 45);
     
     const tableData = report.data.students
       .sort((a: any, b: any) => b.score - a.score)
@@ -520,11 +620,25 @@ const ReportDetail = ({ user }: { user: User }) => {
     doc.save(`report-${report.id}.pdf`);
   };
 
-  if (!report) return (
-    <div className="flex h-screen items-center justify-center">
-      <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
-    </div>
-  );
+  if (loading) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="max-w-4xl mx-auto p-8 text-center">
+        <XCircle className="w-16 h-16 text-rose-500 mx-auto mb-4" />
+        <h2 className="text-2xl font-bold mb-2">Докладът не е намерен</h2>
+        <Button variant="ghost" onClick={() => navigate('/reports')} className="mx-auto">
+          <ArrowLeft className="w-4 h-4" /> Обратно към списъка
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto p-8">
@@ -538,24 +652,26 @@ const ReportDetail = ({ user }: { user: User }) => {
       </div>
 
       <Card className="mb-8">
-        <h1 className="text-3xl font-black mb-2">{report.presentation_title}</h1>
-        <p className="text-gray-500">Проведена на {new Date(report.created_at).toLocaleString('bg-BG')}</p>
+        <h1 className="text-3xl font-black mb-2">{report.presentationTitle}</h1>
+        <p className="text-gray-500">
+          Проведена на {report.createdAt?.toDate ? report.createdAt.toDate().toLocaleString('bg-BG') : '...'}
+        </p>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
         <Card className="text-center">
-          <div className="text-3xl font-black text-indigo-600 mb-1">{report.data.students.length}</div>
+          <div className="text-3xl font-black text-indigo-600 mb-1">{report.data?.students?.length || 0}</div>
           <div className="text-xs font-bold text-gray-400 uppercase">Ученици</div>
         </Card>
         <Card className="text-center">
           <div className="text-3xl font-black text-green-600 mb-1">
-            {Math.round(report.data.students.reduce((acc: number, s: any) => acc + s.score, 0) / (report.data.students.length || 1))}
+            {report.data?.students ? Math.round(report.data.students.reduce((acc: number, s: any) => acc + s.score, 0) / (report.data.students.length || 1)) : 0}
           </div>
           <div className="text-xs font-bold text-gray-400 uppercase">Среден резултат</div>
         </Card>
         <Card className="text-center">
           <div className="text-3xl font-black text-orange-600 mb-1">
-            {report.data.slides.length}
+            {report.data?.slides?.length || 0}
           </div>
           <div className="text-xs font-bold text-gray-400 uppercase">Слайда</div>
         </Card>
@@ -564,7 +680,7 @@ const ReportDetail = ({ user }: { user: User }) => {
       <Card>
         <h2 className="text-xl font-bold mb-6">Резултати по ученици</h2>
         <div className="space-y-4">
-          {report.data.students.sort((a: any, b: any) => b.score - a.score).map((student: any, idx: number) => (
+          {report.data?.students?.sort((a: any, b: any) => b.score - a.score).map((student: any, idx: number) => (
             <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
               <div className="flex items-center gap-4">
                 <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-indigo-600 shadow-sm">
@@ -589,73 +705,83 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetch('/api/presentations', {
-      headers: { 'teacher-id': user.id }
-    })
-      .then(res => res.json())
-      .then(data => {
-        setPresentations(data);
-        setLoading(false);
+    if (!db) {
+      setLoading(false);
+      return;
+    }
+    const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
+      // Sort in memory to avoid index requirements
+      data.sort((a: any, b: any) => {
+        const dateA = a.updatedAt?.toDate?.() || 0;
+        const dateB = b.updatedAt?.toDate?.() || 0;
+        return dateB - dateA;
       });
+      setPresentations(data);
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching presentations:", error);
+      setLoading(false);
+    });
+    return () => unsubscribe();
   }, [user.id]);
 
   const createNew = async () => {
-    const res = await fetch('/api/presentations', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'teacher-id': user.id
-      },
-      body: JSON.stringify({ title: 'Нова презентация' })
+    const docRef = await addDoc(collection(db, 'presentations'), {
+      title: 'Нова презентация',
+      teacherId: user.id,
+      slides: [],
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
     });
-    const data = await res.json();
-    navigate(`/edit/${data.id}`);
+    navigate(`/edit/${docRef.id}`);
   };
 
   const uploadPresentation = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна. Моля, проверете настройките на Firebase.');
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = async (e) => {
       try {
-        const imported = JSON.parse(e.target?.result as string);
-        const res = await fetch('/api/presentations', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'teacher-id': user.id
-          },
-          body: JSON.stringify({ title: imported.title || 'Импортирана презентация' })
-        });
-        const data = await res.json();
+        const content = e.target?.result as string;
+        const imported = JSON.parse(content);
         
-        // Update with full content
-        await fetch(`/api/presentations/${data.id}`, {
-          method: 'PUT',
-          headers: { 
-            'Content-Type': 'application/json',
-            'teacher-id': user.id
-          },
-          body: JSON.stringify({
-            ...imported,
-            id: data.id
-          })
+        if (typeof imported !== 'object' || imported === null) {
+          throw new Error('Invalid JSON format');
+        }
+
+        // Remove the old ID if it exists to let Firestore generate a new one
+        const { id, ...presentationData } = imported;
+        
+        await addDoc(collection(db, 'presentations'), {
+          title: 'Импортиран урок',
+          slides: [],
+          ...presentationData,
+          teacherId: user.id,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
         });
         
-        setPresentations([{ ...imported, id: data.id }, ...presentations]);
+        alert('Урокът е качен успешно!');
+        // Reset input so the same file can be selected again
+        event.target.value = '';
       } catch (err) {
-        alert('Невалиден файл.');
+        console.error("Upload error:", err);
+        alert('Невалиден файл или грешка при качване в базата данни.');
       }
     };
     reader.readAsText(file);
   };
 
   const exportPresentation = async (p: Presentation) => {
-    const res = await fetch(`/api/presentations/${p.id}`, {
-      headers: { 'teacher-id': user.id }
-    });
-    const fullData = await res.json();
-    const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(p, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -664,12 +790,31 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const deletePresentation = async (id: string) => {
-    if (!confirm('Сигурни ли сте?')) return;
-    await fetch(`/api/presentations/${id}`, { 
-      method: 'DELETE',
-      headers: { 'teacher-id': user.id }
-    });
-    setPresentations(prev => prev.filter(p => p.id !== id));
+    if (!id) {
+      alert('Грешка: Невалиден идентификатор на презентация.');
+      return;
+    }
+
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна.');
+      return;
+    }
+    
+    if (!confirm('Сигурни ли сте, че искате да изтриете този урок?')) return;
+    
+    try {
+      // Optimistic update
+      setPresentations(prev => prev.filter(p => p.id !== id));
+      await deleteDoc(doc(db, 'presentations', id));
+    } catch (error) {
+      console.error("Delete failed:", error);
+      alert('Възникна грешка при изтриването на урока. Моля, опитайте отново.');
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    onLogout();
   };
 
   return (
@@ -691,7 +836,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
           <Button variant="secondary" onClick={() => navigate('/reports')}>
             <FileText className="w-4 h-4" /> Доклади
           </Button>
-          <Button variant="ghost" onClick={onLogout} className="text-red-500 hover:bg-red-50">
+          <Button variant="ghost" onClick={handleLogout} className="text-red-500 hover:bg-red-50">
             <LogOut className="w-4 h-4" /> Изход
           </Button>
         </div>
@@ -721,28 +866,52 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {presentations.map(p => (
-            <motion.div key={p.id} layout>
+            <div key={p.id}>
               <Card className="group hover:border-indigo-200 transition-colors">
                 <div className="h-32 bg-gray-50 rounded-xl mb-4 flex items-center justify-center text-gray-300 group-hover:bg-indigo-50 transition-colors">
                   <Layout className="w-12 h-12" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">{p.title}</h3>
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">{p.title || 'Без заглавие'}</h3>
                 <div className="grid grid-cols-5 gap-1">
-                  <Button variant="secondary" className="col-span-2 px-1 text-[10px] h-9" onClick={() => navigate(`/edit/${p.id}`)}>
+                  <Button 
+                    variant="secondary" 
+                    className="col-span-2 px-1 text-[10px] h-9" 
+                    onClick={() => navigate(`/edit/${p.id}`)}
+                    title="Редактиране"
+                  >
                     <Edit2 className="w-3 h-3" /> Редактирай
                   </Button>
-                  <Button variant="primary" className="h-9 p-0 flex items-center justify-center" onClick={() => navigate(`/host/${p.id}`)}>
+                  <Button 
+                    variant="primary" 
+                    className="h-9 p-0 flex items-center justify-center" 
+                    onClick={() => navigate(`/host/${p.id}`)}
+                    title="Стартиране на урок"
+                  >
                     <Play className="w-3.5 h-3.5 fill-current" />
                   </Button>
-                  <Button variant="secondary" className="h-9 p-0 flex items-center justify-center" onClick={() => exportPresentation(p)}>
+                  <Button 
+                    variant="secondary" 
+                    className="h-9 p-0 flex items-center justify-center" 
+                    onClick={() => exportPresentation(p)}
+                    title="Изтегляне на файл"
+                  >
                     <Download className="w-3.5 h-3.5" />
                   </Button>
-                  <Button variant="danger" className="h-9 p-0 flex items-center justify-center" onClick={() => deletePresentation(p.id)}>
+                  <Button 
+                    variant="danger" 
+                    className="h-9 p-0 flex items-center justify-center" 
+                    onClick={(e: any) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      deletePresentation(p.id);
+                    }}
+                    title="Изтриване"
+                  >
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 </div>
               </Card>
-            </motion.div>
+            </div>
           ))}
           {presentations.length === 0 && (
             <div className="col-span-full text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
@@ -759,6 +928,7 @@ const Editor = ({ user }: { user: User }) => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [presentation, setPresentation] = useState<Presentation | null>(null);
+  const [loading, setLoading] = useState(true);
   const [activeSlideIndex, setActiveSlideIndex] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
@@ -774,29 +944,18 @@ const Editor = ({ user }: { user: User }) => {
   const [selectedPresentationSlides, setSelectedPresentationSlides] = useState<Slide[]>([]);
 
   const fetchOtherPresentations = async () => {
-    const res = await fetch('/api/presentations', {
-      headers: { 'teacher-id': user.id }
-    });
-
-    if (!res.ok) {
-      throw new Error('Неуспешно зареждане на презентации');
-    }
-
-    const data = await res.json();
+    const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
+    const snapshot = await getDocs(q);
+    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
     setOtherPresentations(data.filter((p: any) => p.id !== id));
   };
 
   const fetchSlidesForPresentation = async (pId: string) => {
-    const res = await fetch(`/api/presentations/${pId}`, {
-      headers: { 'teacher-id': user.id }
-    });
-
-    if (!res.ok) {
-      throw new Error('Неуспешно зареждане на слайдове');
+    const docRef = doc(db, 'presentations', pId);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      setSelectedPresentationSlides(docSnap.data().slides);
     }
-
-    const data = await res.json();
-    setSelectedPresentationSlides(data.slides);
   };
 
   const importSlides = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -851,10 +1010,35 @@ const Editor = ({ user }: { user: User }) => {
 
   const generateWithAI = async () => {
     if (!aiPrompt.trim() && !aiSourceText.trim()) return;
+    
+    // Ensure we have the latest config
+    if (!globalGeminiApiKey) {
+      await fetchConfig();
+    }
+
+    let ai = getAIInstance();
+    
+    // If no key is found, try to open the selection dialog (AI Studio environment)
+    if (!ai && (window as any).aistudio) {
+      try {
+        const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+        if (!hasKey) {
+          await (window as any).aistudio.openSelectKey();
+          // After opening, the key should be available in process.env.API_KEY
+          ai = getAIInstance();
+        }
+      } catch (e) {
+        console.error("Key selection failed:", e);
+      }
+    }
+
+    if (!ai) {
+      alert('Моля, конфигурирайте Gemini API ключ или изберете такъв чрез диалога за избор на ключ (горе вдясно или чрез настройките).');
+      return;
+    }
+
     setIsGenerating(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      
       const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON масив от интерактивни слайдове на български език.
       Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
       Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
@@ -881,7 +1065,11 @@ const Editor = ({ user }: { user: User }) => {
         }
       });
 
-      const generatedSlides = JSON.parse(response.text || "[]");
+      if (!response.text) {
+        throw new Error("Empty response from AI");
+      }
+
+      const generatedSlides = JSON.parse(response.text);
       if (presentation) {
         setPresentation({
           ...presentation,
@@ -891,21 +1079,35 @@ const Editor = ({ user }: { user: User }) => {
       setShowAiModal(false);
       setAiPrompt('');
       setAiSourceText('');
-    } catch (error) {
+    } catch (error: any) {
       console.error("AI Generation failed:", error);
-      alert("Грешка при генерирането. Моля опитайте пак.");
+      
+      const errorMsg = error.message || "";
+      if (errorMsg.includes("Requested entity was not found") || errorMsg.includes("404") || errorMsg.includes("API_KEY_INVALID")) {
+        if ((window as any).aistudio) {
+          alert("Избраният API ключ е невалиден или няма достъп до модела. Моля, изберете нов ключ.");
+          await (window as any).aistudio.openSelectKey();
+        } else {
+          alert("Грешка: Невалиден API ключ или моделът не е намерен. Проверете конфигурацията си.");
+        }
+      } else {
+        alert(`Грешка при генерирането: ${error.message || "Моля опитайте пак."}`);
+      }
     } finally {
       setIsGenerating(false);
     }
   };
 
   useEffect(() => {
-    fetch(`/api/presentations/${id}`, {
-      headers: { 'teacher-id': user.id }
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.slides) {
+    if (!db) {
+      setLoading(false);
+      return;
+    }
+    const docRef = doc(db, 'presentations', id!);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
+        if (data.slides) {
           data.slides = data.slides.map((s: any) => {
             if (s.type === 'matching' && !s.content.pairs) {
               return { ...s, content: { ...s.content, pairs: [] } };
@@ -914,27 +1116,24 @@ const Editor = ({ user }: { user: User }) => {
           });
         }
         setPresentation(data);
-      });
-  }, [id, user.id]);
+      }
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching presentation:", error);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [id]);
 
   const save = async () => {
     if (!presentation) return;
     setSaveStatus('saving');
     try {
-      const res = await fetch(`/api/presentations/${id}`, {
-        method: 'PUT',
-        headers: { 
-          'Content-Type': 'application/json',
-          'teacher-id': user.id
-        },
-        body: JSON.stringify(presentation)
+      const docRef = doc(db, 'presentations', id!);
+      await updateDoc(docRef, {
+        ...presentation,
+        updatedAt: serverTimestamp()
       });
-      
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Failed to save');
-      }
-      
       setSaveStatus('saved');
     } catch (error) {
       console.error("Save failed:", error);
@@ -994,7 +1193,24 @@ const Editor = ({ user }: { user: User }) => {
     updateSlide({ content: { ...slide.content, ...updates } });
   };
 
-  if (!presentation) return null;
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
+      </div>
+    );
+  }
+
+  if (!presentation) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-gray-50 p-8 text-center">
+        <XCircle className="w-16 h-16 text-rose-500 mb-4" />
+        <h2 className="text-2xl font-bold mb-2">Урокът не е намерен</h2>
+        <p className="text-gray-500 mb-6">Възможно е урокът да е бил изтрит или да нямате достъп до него.</p>
+        <Button onClick={() => navigate('/')}>Обратно към таблото</Button>
+      </div>
+    );
+  }
 
   const activeSlide = presentation.slides[activeSlideIndex];
 
@@ -1925,13 +2141,12 @@ const HostView = ({ user }: { user: User }) => {
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
   useEffect(() => {
-    if (id) {
-      fetch(`/api/presentations/${id}`, {
-        headers: { 'teacher-id': user.id }
-      })
-        .then(res => res.json())
-        .then(data => {
-          if (data && data.slides) {
+    if (id && db) {
+      const docRef = doc(db, 'presentations', id);
+      getDoc(docRef).then(docSnap => {
+        if (docSnap.exists()) {
+          const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
+          if (data.slides) {
             data.slides = data.slides.map((s: any) => {
               if (s.type === 'matching' && !s.content.pairs) {
                 return { ...s, content: { ...s.content, pairs: [] } };
@@ -1940,9 +2155,10 @@ const HostView = ({ user }: { user: User }) => {
             });
           }
           setPresentationData(data);
-        });
+        }
+      });
     }
-  }, [id, user.id]);
+  }, [id, db]);
 
   useEffect(() => {
     if (timeLeft !== null && timeLeft > 0) {
@@ -2001,22 +2217,17 @@ const HostView = ({ user }: { user: User }) => {
           setCurrentSlide(null);
           setIsFinished(true);
           // Auto-save report to database when finished
-          if (presentationData) {
-            fetch('/api/reports', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'teacher-id': user.id
+          if (presentationData && db) {
+            addDoc(collection(db, 'reports'), {
+              teacherId: user.id,
+              presentationId: presentationData.id,
+              presentationTitle: presentationData.title,
+              data: {
+                students: msg.leaderboard,
+                slides: presentationData.slides,
+                date: new Date().toLocaleDateString("bg-BG")
               },
-              body: JSON.stringify({
-                presentationId: presentationData.id,
-                presentationTitle: presentationData.title,
-                data: {
-                  students: msg.leaderboard,
-                  slides: presentationData.slides,
-                  date: new Date().toLocaleDateString("bg-BG")
-                }
-              })
+              createdAt: serverTimestamp()
             });
           }
           break;
@@ -2548,25 +2759,26 @@ const HostView = ({ user }: { user: User }) => {
                       </div>
                     ))}
                   </div>
-                  {/* Right Column */}
+                  {/* Right Column - Shuffled for Host to not show answers */}
                   <div className="space-y-4">
-                    {currentSlide.content.pairs?.map((pair: any) => (
-                      <div key={`right-${pair.id}`} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 text-center font-bold text-xl">
-                        {pair.right}
-                      </div>
-                    ))}
+                    {[...(currentSlide.content.pairs || [])]
+                      .sort((a, b) => a.id.localeCompare(b.id)) // Stable sort first
+                      .sort((a, b) => {
+                        // Use slide ID as seed for pseudo-random shuffle that's stable for this slide
+                        const seed = currentSlide.id || 'seed';
+                        const hash = (str: string) => {
+                          let h = 0;
+                          for (let i = 0; i < str.length; i++) h = Math.imul(31, h) + str.charCodeAt(i) | 0;
+                          return h;
+                        };
+                        return hash(a.id + seed) - hash(b.id + seed);
+                      })
+                      .map((pair: any) => (
+                        <div key={`right-${pair.id}`} className="bg-white p-6 rounded-2xl shadow-sm border-2 border-gray-100 text-center font-bold text-xl">
+                          {pair.right}
+                        </div>
+                      ))}
                   </div>
-                  {/* Lines (Visual only for Host to show correct answers) */}
-                  <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-10">
-                    {currentSlide.content.pairs?.map((pair: any, idx: number) => (
-                      <line 
-                        key={`line-${pair.id}`}
-                        x1="45%" y1={`${(idx * 100 / currentSlide.content.pairs.length) + (50 / currentSlide.content.pairs.length)}%`}
-                        x2="55%" y2={`${(idx * 100 / currentSlide.content.pairs.length) + (50 / currentSlide.content.pairs.length)}%`}
-                        stroke="#4f46e5" strokeWidth="4" strokeDasharray="8 4"
-                      />
-                    ))}
-                  </svg>
                 </div>
                 <div className="mt-12 text-gray-400 font-bold uppercase tracking-widest">
                   Учениците свързват двойките... ({Object.keys(responses).length} отговора)
@@ -3355,8 +3567,13 @@ const StudentView = () => {
 
 export default function App() {
   const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('teacher_user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('teacher_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      console.error("Failed to parse user from localStorage", e);
+      return null;
+    }
   });
 
   const handleLogin = (user: User) => {
