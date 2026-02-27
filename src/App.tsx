@@ -2125,10 +2125,20 @@ const HostView = ({ user }: { user: User }) => {
   const [isConnected, setIsConnected] = useState(false);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
+  const reportSavedRef = useRef(false);
+  const allResponsesRef = useRef<Record<string, Record<number, any>>>({});
+  const currentSlideIndexRef = useRef(-1);
+  const presentationDataRef = useRef<Presentation | null>(null);
+  const [currentSlideIndex, setCurrentSlideIndex] = useState(-1);
   const navigate = useNavigate();
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
   useEffect(() => {
+    reportSavedRef.current = false;
+    allResponsesRef.current = {};
+    currentSlideIndexRef.current = -1;
+    setCurrentSlideIndex(-1);
+
     if (id && db) {
       const docRef = doc(db, 'presentations', id);
       getDoc(docRef).then(docSnap => {
@@ -2143,10 +2153,17 @@ const HostView = ({ user }: { user: User }) => {
             });
           }
           setPresentationData(data);
+          presentationDataRef.current = data;
+        } else {
+          presentationDataRef.current = null;
         }
       });
     }
   }, [id, db]);
+
+  useEffect(() => {
+    currentSlideIndexRef.current = currentSlideIndex;
+  }, [currentSlideIndex]);
 
   useEffect(() => {
     if (timeLeft !== null && timeLeft > 0) {
@@ -2156,6 +2173,41 @@ const HostView = ({ user }: { user: User }) => {
     }
     return () => clearTimeout(timerRef.current);
   }, [timeLeft]);
+
+  const buildSessionReportData = (finalLeaderboard: any[]) => {
+    const activePresentation = presentationDataRef.current;
+    if (!activePresentation) return null;
+
+    const studentsWithResponses = finalLeaderboard.map((student: any) => ({
+      ...student,
+      responses: allResponsesRef.current[student.id] || {}
+    }));
+
+    return {
+      presentationTitle: activePresentation.title,
+      date: new Date().toLocaleDateString("bg-BG"),
+      students: studentsWithResponses,
+      slides: activePresentation.slides
+    };
+  };
+
+  const persistReport = async (reportData: any) => {
+    const activePresentation = presentationDataRef.current;
+    if (!db || !activePresentation || reportSavedRef.current) return;
+
+    try {
+      await addDoc(collection(db, 'reports'), {
+        teacherId: user.id,
+        presentationId: activePresentation.id,
+        presentationTitle: activePresentation.title,
+        data: reportData,
+        createdAt: serverTimestamp()
+      });
+      reportSavedRef.current = true;
+    } catch (error) {
+      console.error('Failed to persist report in Firestore:', error);
+    }
+  };
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2175,6 +2227,10 @@ const HostView = ({ user }: { user: User }) => {
           setPin(msg.pin);
           if (msg.students) setStudents(msg.students);
           if (msg.currentSlide) setCurrentSlide(msg.currentSlide);
+          if (typeof msg.currentSlideIndex === 'number') {
+            setCurrentSlideIndex(msg.currentSlideIndex);
+            currentSlideIndexRef.current = msg.currentSlideIndex;
+          }
           break;
         case 'STUDENT_JOINED':
           setStudents(prev => [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }]);
@@ -2184,6 +2240,9 @@ const HostView = ({ user }: { user: User }) => {
           break;
         case 'SLIDE_UPDATE':
           console.log("Received slide update:", msg.slide);
+          const incomingIndex = typeof msg.index === 'number' ? msg.index : -1;
+          setCurrentSlideIndex(incomingIndex);
+          currentSlideIndexRef.current = incomingIndex;
           setCurrentSlide(msg.slide);
           setResponses({});
           if (msg.slide?.duration) {
@@ -2197,28 +2256,28 @@ const HostView = ({ user }: { user: User }) => {
           break;
         case 'RESPONSE_RECEIVED':
           setResponses(prev => ({ ...prev, [msg.id]: msg.response }));
+          if (currentSlideIndexRef.current >= 0) {
+            const studentHistory = allResponsesRef.current[msg.id] || {};
+            allResponsesRef.current[msg.id] = { ...studentHistory, [currentSlideIndexRef.current]: msg.response };
+          }
           if (msg.leaderboard) setLeaderboard(msg.leaderboard);
           break;
-        case 'PRESENTATION_FINISHED':
-          setLeaderboard(msg.leaderboard);
+        case 'PRESENTATION_FINISHED': {
+          const finalLeaderboard = (msg.leaderboard || []).map((student: any) => ({
+            ...student,
+            id: student.id || student.name
+          }));
+          setLeaderboard(finalLeaderboard);
           setShowLeaderboard(true);
           setCurrentSlide(null);
           setIsFinished(true);
-          // Auto-save report to database when finished
-          if (presentationData && db) {
-            addDoc(collection(db, 'reports'), {
-              teacherId: user.id,
-              presentationId: presentationData.id,
-              presentationTitle: presentationData.title,
-              data: {
-                students: msg.leaderboard,
-                slides: presentationData.slides,
-                date: new Date().toLocaleDateString("bg-BG")
-              },
-              createdAt: serverTimestamp()
-            });
+
+          const reportData = buildSessionReportData(finalLeaderboard);
+          if (reportData) {
+            void persistReport(reportData);
           }
           break;
+        }
       }
     };
 
@@ -2230,34 +2289,37 @@ const HostView = ({ user }: { user: User }) => {
   };
 
   const finishSession = async () => {
-    if (!pin) return;
-    try {
-      const res = await fetch(`/api/sessions/${pin}/report`);
-      const data = await res.json();
-      
-      await fetch('/api/reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          presentationId: id,
-          presentationTitle: data.presentationTitle,
-          data: data
-        })
-      });
-      
-      navigate('/reports');
-    } catch (err) {
-      console.error("Failed to save report", err);
-      navigate('/');
+    const finalLeaderboard = [...leaderboard]
+      .sort((a: any, b: any) => b.score - a.score)
+      .map((student: any) => ({ ...student, id: student.id || student.name }));
+
+    setLeaderboard(finalLeaderboard);
+    setShowLeaderboard(true);
+    setCurrentSlide(null);
+    setIsFinished(true);
+
+    const reportData = buildSessionReportData(finalLeaderboard);
+    if (reportData) {
+      await persistReport(reportData);
     }
+
+    navigate('/reports');
   };
 
   const downloadReport = async () => {
     if (!pin) return;
+
+    const sortedLeaderboard = [...leaderboard]
+      .sort((a: any, b: any) => b.score - a.score)
+      .map((student: any) => ({ ...student, id: student.id || student.name }));
+
+    const data = buildSessionReportData(sortedLeaderboard);
+    if (!data) {
+      alert('Липсват данни за отчет.');
+      return;
+    }
+
     try {
-      const res = await fetch(`/api/sessions/${pin}/report`);
-      const data = await res.json();
-      
       const doc = new jsPDF();
       
       // Add Cyrillic support by loading a font
