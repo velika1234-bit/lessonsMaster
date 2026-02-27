@@ -433,7 +433,7 @@ const ReportsDashboard = ({ user }: { user: User }) => {
     }
     const q = query(collection(db, 'reports'), where('teacherId', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as any));
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
       // Sort in memory to avoid index requirements
       data.sort((a, b) => {
         const dateA = a.createdAt?.toDate?.() || 0;
@@ -450,6 +450,10 @@ const ReportsDashboard = ({ user }: { user: User }) => {
   }, [user.id]);
 
   const deleteReport = async (id: string) => {
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна.');
+      return;
+    }
     if (!confirm('Сигурни ли сте, че искате да изтриете този доклад?')) return;
     await deleteDoc(doc(db, 'reports', id));
   };
@@ -522,7 +526,7 @@ const ReportDetail = ({ user }: { user: User }) => {
     const docRef = doc(db, 'reports', id!);
     getDoc(docRef).then(docSnap => {
       if (docSnap.exists()) {
-        setReport({ id: docSnap.id, ...docSnap.data() });
+        setReport({ ...docSnap.data(), id: docSnap.id });
       }
       setLoading(false);
     }).catch(err => {
@@ -711,7 +715,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
     }
     const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Presentation));
       // Sort in memory to avoid index requirements
       data.sort((a: any, b: any) => {
         const dateA = a.updatedAt?.toDate?.() || 0;
@@ -728,6 +732,10 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   }, [user.id]);
 
   const createNew = async () => {
+    if (!db) {
+      alert('Грешка: Базата данни не е достъпна. Моля, проверете настройките на Firebase.');
+      return;
+    }
     const docRef = await addDoc(collection(db, 'presentations'), {
       title: 'Нова презентация',
       teacherId: user.id,
@@ -813,7 +821,9 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
-    await signOut(auth);
+    if (auth) {
+      await signOut(auth);
+    }
     onLogout();
   };
 
@@ -936,9 +946,9 @@ const Editor = ({ user }: { user: User }) => {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiSourceText, setAiSourceText] = useState('');
   const [aiMode, setAiMode] = useState<'presentation' | 'quiz'>('presentation');
-  const [showAiModal, setShowAiModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addModalTab, setAddModalTab] = useState<'new' | 'existing' | 'import' | 'ai'>('new');
+  const canGenerateWithAi = Boolean(aiPrompt.trim() || aiSourceText.trim());
   const [otherPresentations, setOtherPresentations] = useState<Presentation[]>([]);
   const [selectedPresentationId, setSelectedPresentationId] = useState<string | null>(null);
   const [selectedPresentationSlides, setSelectedPresentationSlides] = useState<Slide[]>([]);
@@ -946,7 +956,7 @@ const Editor = ({ user }: { user: User }) => {
   const fetchOtherPresentations = async () => {
     const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
     const snapshot = await getDocs(q);
-    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
+    const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Presentation));
     setOtherPresentations(data.filter((p: any) => p.id !== id));
   };
 
@@ -1009,7 +1019,10 @@ const Editor = ({ user }: { user: User }) => {
   ];
 
   const generateWithAI = async () => {
-    if (!aiPrompt.trim() && !aiSourceText.trim()) return;
+    if (!canGenerateWithAi) {
+      alert('Моля, въведете тема или изходен текст за AI генерация.');
+      return;
+    }
     
     // Ensure we have the latest config
     if (!globalGeminiApiKey) {
@@ -1076,7 +1089,7 @@ const Editor = ({ user }: { user: User }) => {
           slides: [...presentation.slides, ...generatedSlides.map((s: any) => ({ ...s, id: nanoid(10) }))]
         });
       }
-      setShowAiModal(false);
+      setShowAddModal(false);
       setAiPrompt('');
       setAiSourceText('');
     } catch (error: any) {
@@ -1106,7 +1119,7 @@ const Editor = ({ user }: { user: User }) => {
     const docRef = doc(db, 'presentations', id!);
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
+        const data = { ...docSnap.data(), id: docSnap.id } as Presentation;
         if (data.slides) {
           data.slides = data.slides.map((s: any) => {
             if (s.type === 'matching' && !s.content.pairs) {
@@ -1259,44 +1272,18 @@ const Editor = ({ user }: { user: User }) => {
             <Save className="w-4 h-4" />
             Запази
           </Button>
-          <Button variant="secondary" onClick={() => setShowAiModal(true)}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setShowAddModal(true);
+              setAddModalTab('ai');
+            }}
+          >
             <Send className="w-4 h-4" /> AI Асистент
           </Button>
           <Button variant="primary" onClick={() => navigate(`/host/${id}`)}>Пусни</Button>
         </div>
       </header>
-
-      {/* AI Modal */}
-      <AnimatePresence>
-        {showAiModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8"
-            >
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-bold">Генерирай с AI</h3>
-                <Button variant="ghost" onClick={() => setShowAiModal(false)}><X className="w-5 h-5" /></Button>
-              </div>
-              <p className="text-gray-500 mb-6">Въведете тема и AI ще създаде съдържание и въпроси за вас.</p>
-              <textarea 
-                className="w-full h-32 p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 mb-6"
-                placeholder="Напр. Слънчевата система за 4-ти клас..."
-                value={aiPrompt}
-                onChange={e => setAiPrompt(e.target.value)}
-              />
-              <div className="flex gap-3">
-                <Button variant="secondary" className="flex-1" onClick={() => setShowAiModal(false)}>Отказ</Button>
-                <Button variant="primary" className="flex-1" onClick={generateWithAI} loading={isGenerating}>
-                  Генерирай
-                </Button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Add Slide Modal */}
       <AnimatePresence>
@@ -1479,6 +1466,7 @@ const Editor = ({ user }: { user: User }) => {
                       className="w-full h-16 text-xl shadow-xl shadow-indigo-100 mt-8" 
                       onClick={generateWithAI} 
                       loading={isGenerating}
+                      disabled={!canGenerateWithAi}
                     >
                       Генерирай {aiMode === 'presentation' ? 'Презентация' : 'Тест'}
                     </Button>
@@ -2145,7 +2133,7 @@ const HostView = ({ user }: { user: User }) => {
       const docRef = doc(db, 'presentations', id);
       getDoc(docRef).then(docSnap => {
         if (docSnap.exists()) {
-          const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
+          const data = { ...docSnap.data(), id: docSnap.id } as Presentation;
           if (data.slides) {
             data.slides = data.slides.map((s: any) => {
               if (s.type === 'matching' && !s.content.pairs) {
