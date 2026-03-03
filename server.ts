@@ -7,6 +7,49 @@ import Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import path from "path";
 import { fileURLToPath } from "url";
+import bcrypt from "bcryptjs";
+import * as jwt from "jsonwebtoken";
+
+// JWT Configuration
+const JWT_SECRET = process.env.JWT_SECRET || "lesson-master-secret-key-change-in-production";
+const JWT_EXPIRES_IN = "7d";
+
+// Helper functions for JWT
+const generateToken = (userId: string): string => {
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+};
+
+const verifyToken = (token: string): { userId: string } | null => {
+  try {
+    return jwt.verify(token, JWT_SECRET) as { userId: string };
+  } catch {
+    return null;
+  }
+};
+
+// Middleware to verify JWT from Authorization header
+const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader?.split(' ')[1]; // Bearer TOKEN
+  
+  // Fallback to teacher-id header for backward compatibility
+  const teacherId = req.headers["teacher-id"] as string;
+  
+  if (token) {
+    const decoded = verifyToken(token);
+    if (decoded) {
+      (req as any).userId = decoded.userId;
+      return next();
+    }
+  }
+  
+  if (teacherId) {
+    (req as any).userId = teacherId;
+    return next();
+  }
+  
+  return res.status(401).json({ error: "Unauthorized - Invalid or missing token" });
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -116,22 +159,66 @@ const rooms = new Map<string, {
 const presentationToPin = new Map<string, string>();
 
 // API Routes
-app.post("/api/auth/register", (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   const { email, password, name } = req.body;
+  
+  if (!email || !password || !name) {
+    return res.status(400).json({ error: "Email, password, and name are required" });
+  }
+  
+  if (password.length < 6) {
+    return res.status(400).json({ error: "Password must be at least 6 characters" });
+  }
+  
   const id = nanoid(10);
   try {
-    db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(id, email, password, name);
-    res.json({ id, email, name });
+    // Hash password with bcrypt (cost factor 12)
+    const hashedPassword = await bcrypt.hash(password, 12);
+    db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(id, email, hashedPassword, name);
+    
+    // Generate JWT token
+    const token = generateToken(id);
+    res.json({ id, email, name, token });
   } catch (err) {
     res.status(400).json({ error: "Email already exists" });
   }
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
-  const user = db.prepare("SELECT * FROM users WHERE email = ? AND password = ?").get(email, password);
-  if (!user) return res.status(401).json({ error: "Invalid credentials" });
-  res.json({ id: user.id, email: user.email, name: user.name });
+  
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required" });
+  }
+  
+  const user: any = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  if (!user) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  
+  // Check if password is hashed (bcrypt hashes start with $2)
+  let isValidPassword = false;
+  if (user.password.startsWith('$2')) {
+    // Password is hashed - use bcrypt compare
+    isValidPassword = await bcrypt.compare(password, user.password);
+  } else {
+    // Legacy plain text password - compare directly and migrate
+    isValidPassword = user.password === password;
+    if (isValidPassword) {
+      // Migrate to hashed password
+      const hashedPassword = await bcrypt.hash(password, 12);
+      db.prepare("UPDATE users SET password = ? WHERE id = ?").run(hashedPassword, user.id);
+      console.log(`Migrated password for user ${user.email} to bcrypt hash`);
+    }
+  }
+  
+  if (!isValidPassword) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  
+  // Generate JWT token
+  const token = generateToken(user.id);
+  res.json({ id: user.id, email: user.email, name: user.name, token });
 });
 
 // Google OAuth
@@ -180,17 +267,23 @@ app.get("/api/auth/google/callback", async (req, res) => {
     );
 
     // Find or create user
-    let user = db.prepare("SELECT * FROM users WHERE email = ?").get(googleUser.email);
+    let user: any = db.prepare("SELECT * FROM users WHERE email = ?").get(googleUser.email);
     if (!user) {
       const id = nanoid(10);
+      // Hash a random password for Google OAuth users
+      const randomPassword = nanoid(32);
+      const hashedPassword = await bcrypt.hash(randomPassword, 12);
       db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
         id,
         googleUser.email,
-        "google-auth", // placeholder password
+        hashedPassword,
         googleUser.name
       );
       user = { id, email: googleUser.email, name: googleUser.name };
     }
+
+    // Generate JWT token
+    const token = generateToken(user.id);
 
     // Send success message and close popup
     res.send(`
@@ -200,7 +293,8 @@ app.get("/api/auth/google/callback", async (req, res) => {
             if (window.opener) {
               window.opener.postMessage({ 
                 type: 'OAUTH_AUTH_SUCCESS', 
-                user: ${JSON.stringify({ id: user.id, email: user.email, name: user.name })} 
+                user: ${JSON.stringify({ id: user.id, email: user.email, name: user.name })},
+                token: "${token}"
               }, '*');
               window.close();
             } else {
@@ -226,31 +320,30 @@ app.get("/api/debug/check-email", (req, res) => {
 });
 
 // Helper to ensure teacher exists in SQLite (fallback for session mismatch)
-const ensureTeacher = (id: string, name: string = "Учител") => {
+const ensureTeacher = async (id: string, name: string = "Учител") => {
   const user = db.prepare("SELECT id FROM users WHERE id = ?").get(id);
   if (!user) {
     console.log("Auto-creating user record for sync:", id);
+    const hashedPassword = await bcrypt.hash(nanoid(32), 12);
     db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
       id, 
       `${id}@internal.system`, 
-      "synced-session", 
+      hashedPassword, 
       name
     );
   }
 };
 
-app.get("/api/presentations", (req, res) => {
-  const teacherId = req.headers["teacher-id"] as string;
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  ensureTeacher(teacherId);
+app.get("/api/presentations", authenticateToken, async (req, res) => {
+  const teacherId = (req as any).userId;
+  await ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM presentations WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
   res.json(rows);
 });
 
-app.post("/api/presentations", (req, res) => {
-  const teacherId = req.headers["teacher-id"] as string;
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  ensureTeacher(teacherId);
+app.post("/api/presentations", authenticateToken, async (req, res) => {
+  const teacherId = (req as any).userId;
+  await ensureTeacher(teacherId);
   const { title, slides, theme, globalBackgroundImage } = req.body;
   const id = nanoid(10);
   
@@ -286,8 +379,8 @@ app.post("/api/presentations", (req, res) => {
   }
 });
 
-app.get("/api/presentations/:id", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
+app.get("/api/presentations/:id", authenticateToken, (req, res) => {
+  const teacherId = (req as any).userId;
   const presentation = db.prepare("SELECT * FROM presentations WHERE id = ?").get(req.params.id);
   if (!presentation) return res.status(404).json({ error: "Not found" });
   
@@ -298,9 +391,8 @@ app.get("/api/presentations/:id", (req, res) => {
   res.json({ ...presentation, slides: slides.map((s: any) => ({ ...s, content: JSON.parse(s.content) })) });
 });
 
-app.put("/api/presentations/:id", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+app.put("/api/presentations/:id", authenticateToken, (req, res) => {
+  const teacherId = (req as any).userId;
   
   const { title, slides, theme, globalBackgroundImage } = req.body;
   
@@ -335,34 +427,30 @@ app.put("/api/presentations/:id", (req, res) => {
   }
 });
 
-app.delete("/api/presentations/:id", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+app.delete("/api/presentations/:id", authenticateToken, (req, res) => {
+  const teacherId = (req as any).userId;
   db.prepare("DELETE FROM presentations WHERE id = ? AND teacher_id = ?").run(req.params.id, teacherId);
   res.json({ success: true });
 });
 
-app.get("/api/reports", (req, res) => {
-  const teacherId = req.headers["teacher-id"] as string;
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  ensureTeacher(teacherId);
+app.get("/api/reports", authenticateToken, async (req, res) => {
+  const teacherId = (req as any).userId;
+  await ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM reports WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
   res.json(rows.map((r: any) => ({ ...r, data: JSON.parse(r.data) })));
 });
 
-app.get("/api/reports/:id", (req, res) => {
-  const teacherId = req.headers["teacher-id"] as string;
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  ensureTeacher(teacherId);
+app.get("/api/reports/:id", authenticateToken, async (req, res) => {
+  const teacherId = (req as any).userId;
+  await ensureTeacher(teacherId);
   const row = db.prepare("SELECT * FROM reports WHERE id = ? AND teacher_id = ?").get(req.params.id, teacherId);
   if (!row) return res.status(404).json({ error: "Report not found" });
-  res.json({ ...row, data: JSON.parse(row.data) });
+  res.json({ ...row, data: JSON.parse((row as any).data) });
 });
 
-app.post("/api/reports", (req, res) => {
-  const teacherId = req.headers["teacher-id"] as string;
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  ensureTeacher(teacherId);
+app.post("/api/reports", authenticateToken, async (req, res) => {
+  const teacherId = (req as any).userId;
+  await ensureTeacher(teacherId);
   const { presentationId, presentationTitle, data, privacyMode } = req.body;
   const id = nanoid(10);
   
@@ -393,9 +481,8 @@ app.post("/api/reports", (req, res) => {
   res.json({ id });
 });
 
-app.post("/api/user/purge", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+app.post("/api/user/purge", authenticateToken, (req, res) => {
+  const teacherId = (req as any).userId;
   
   try {
     db.transaction(() => {
@@ -408,9 +495,8 @@ app.post("/api/user/purge", (req, res) => {
   }
 });
 
-app.delete("/api/reports/:id", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
-  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+app.delete("/api/reports/:id", authenticateToken, (req, res) => {
+  const teacherId = (req as any).userId;
   db.prepare("DELETE FROM reports WHERE id = ? AND teacher_id = ?").run(req.params.id, teacherId);
   res.json({ success: true });
 });
