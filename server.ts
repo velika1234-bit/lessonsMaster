@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import axios from "axios";
 import { createServer } from "http";
@@ -8,7 +9,8 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
-import * as jwt from "jsonwebtoken";
+import pkg from "jsonwebtoken";
+const { sign, verify } = pkg;
 
 // JWT Configuration
 const JWT_SECRET = process.env.JWT_SECRET || "lesson-master-secret-key-change-in-production";
@@ -16,12 +18,12 @@ const JWT_EXPIRES_IN = "7d";
 
 // Helper functions for JWT
 const generateToken = (userId: string): string => {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  return sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 };
 
 const verifyToken = (token: string): { userId: string } | null => {
   try {
-    return jwt.verify(token, JWT_SECRET) as { userId: string };
+    return verify(token, JWT_SECRET) as { userId: string };
   } catch {
     return null;
   }
