@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import path from "path";
+import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import pkg from "jsonwebtoken";
@@ -895,8 +896,16 @@ const startServer = async () => {
   console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
   console.log(`__dirname: ${__dirname}`);
   
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Loading Vite dev server...");
+  const distPath = path.join(__dirname, "dist");
+  const hasBuiltClient = existsSync(path.join(distPath, "index.html"));
+
+  if (process.env.NODE_ENV !== "production" || !hasBuiltClient) {
+    if (process.env.NODE_ENV === "production" && !hasBuiltClient) {
+      console.warn(`dist/index.html not found at ${distPath}. Falling back to Vite middleware.`);
+    } else {
+      console.log("Loading Vite dev server...");
+    }
+
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -905,7 +914,6 @@ const startServer = async () => {
     console.log("Vite middleware loaded");
   } else {
     // Serve built static files in production
-    const distPath = path.join(__dirname, "dist");
     console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
