@@ -891,6 +891,11 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
+    if (!auth) {
+      onLogout();
+      return;
+    }
+
     await signOut(auth);
     onLogout();
   };

@@ -518,6 +518,20 @@ app.get("/api/config", (req, res) => {
   });
 });
 
+app.get("/env.js", (req, res) => {
+  const runtimeConfig = {
+    VITE_FIREBASE_API_KEY: process.env.VITE_FIREBASE_API_KEY || "",
+    VITE_FIREBASE_AUTH_DOMAIN: process.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+    VITE_FIREBASE_PROJECT_ID: process.env.VITE_FIREBASE_PROJECT_ID || "",
+    VITE_FIREBASE_STORAGE_BUCKET: process.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+    VITE_FIREBASE_MESSAGING_SENDER_ID: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    VITE_FIREBASE_APP_ID: process.env.VITE_FIREBASE_APP_ID || ""
+  };
+
+  res.type("application/javascript");
+  res.send(`window.__RUNTIME_CONFIG__ = ${JSON.stringify(runtimeConfig)};`);
+});
+
 // Health check endpoint for Railway - MUST be before static file serving
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
