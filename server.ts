@@ -932,6 +932,31 @@ const startServer = async () => {
   });
 };
 
+
+const shutdown = (signal: string) => {
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  wss.clients.forEach(client => {
+    try { client.close(); } catch {}
+  });
+
+  server.close(() => {
+    try {
+      db.close();
+      console.log('Database connection closed');
+    } catch (err) {
+      console.error('Error while closing database:', err);
+    }
+    process.exit(0);
+  });
+
+  // Force exit if graceful shutdown takes too long
+  setTimeout(() => process.exit(0), 5000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
 startServer().catch(err => {
   console.error("Failed to start server:", err);
   process.exit(1);

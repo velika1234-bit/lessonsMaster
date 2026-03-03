@@ -18,4 +18,4 @@ COPY --from=build /app/server.ts ./server.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 
 EXPOSE 8080
-CMD ["npm", "run", "start"]
+CMD ["node", "--import", "tsx", "server.ts"]
