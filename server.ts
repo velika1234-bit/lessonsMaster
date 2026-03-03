@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import path from "path";
+import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import pkg from "jsonwebtoken";
@@ -517,6 +518,20 @@ app.get("/api/config", (req, res) => {
   });
 });
 
+app.get("/env.js", (req, res) => {
+  const runtimeConfig = {
+    VITE_FIREBASE_API_KEY: process.env.VITE_FIREBASE_API_KEY || "",
+    VITE_FIREBASE_AUTH_DOMAIN: process.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+    VITE_FIREBASE_PROJECT_ID: process.env.VITE_FIREBASE_PROJECT_ID || "",
+    VITE_FIREBASE_STORAGE_BUCKET: process.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+    VITE_FIREBASE_MESSAGING_SENDER_ID: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    VITE_FIREBASE_APP_ID: process.env.VITE_FIREBASE_APP_ID || ""
+  };
+
+  res.type("application/javascript");
+  res.send(`window.__RUNTIME_CONFIG__ = ${JSON.stringify(runtimeConfig)};`);
+});
+
 // Health check endpoint for Railway - MUST be before static file serving
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
@@ -895,8 +910,16 @@ const startServer = async () => {
   console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
   console.log(`__dirname: ${__dirname}`);
   
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Loading Vite dev server...");
+  const distPath = path.join(__dirname, "dist");
+  const hasBuiltClient = existsSync(path.join(distPath, "index.html"));
+
+  if (process.env.NODE_ENV !== "production" || !hasBuiltClient) {
+    if (process.env.NODE_ENV === "production" && !hasBuiltClient) {
+      console.warn(`dist/index.html not found at ${distPath}. Falling back to Vite middleware.`);
+    } else {
+      console.log("Loading Vite dev server...");
+    }
+
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -905,7 +928,6 @@ const startServer = async () => {
     console.log("Vite middleware loaded");
   } else {
     // Serve built static files in production
-    const distPath = path.join(__dirname, "dist");
     console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
@@ -923,6 +945,31 @@ const startServer = async () => {
     console.log(`Health check: http://localhost:${PORT}/health`);
   });
 };
+
+
+const shutdown = (signal: string) => {
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  wss.clients.forEach(client => {
+    try { client.close(); } catch {}
+  });
+
+  server.close(() => {
+    try {
+      db.close();
+      console.log('Database connection closed');
+    } catch (err) {
+      console.error('Error while closing database:', err);
+    }
+    process.exit(0);
+  });
+
+  // Force exit if graceful shutdown takes too long
+  setTimeout(() => process.exit(0), 5000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 startServer().catch(err => {
   console.error("Failed to start server:", err);
