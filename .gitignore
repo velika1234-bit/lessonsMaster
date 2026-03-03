@@ -1,16 +1,18 @@
 node_modules/
 build/
 dist/
+dist-server/
 coverage/
 .DS_Store
 *.log
-.env*
+.env
+.env.local
+.env.production
 !.env.example
--e 
-# Environment files
-*.env
-*.env.*
--e 
-# Environment files
-*.env
-*.env.*
+
+# Database
+*.db
+presentations.db
+
+# Lock files (use npm)
+yarn.lock
