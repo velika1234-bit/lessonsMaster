@@ -2435,19 +2435,28 @@ const HostView = ({ user }: { user: User }) => {
       const res = await fetch(`/api/sessions/${pin}/report`);
       const data = await res.json();
       
-      await fetch('/api/reports', {
+      const saveResponse = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
         body: JSON.stringify({
           presentationId: id,
           presentationTitle: data.presentationTitle,
           data: data
         })
       });
-      
+
+      if (!saveResponse.ok) {
+        const errorBody = await saveResponse.text();
+        throw new Error(`Report save failed (${saveResponse.status}): ${errorBody}`);
+      }
+
       navigate('/reports');
     } catch (err) {
       console.error("Failed to save report", err);
+      alert('Не успяхме да запазим доклада. Моля, опитайте отново.');
       navigate('/');
     }
   };
