@@ -7,7 +7,7 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import path from "path";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import pkg from "jsonwebtoken";
@@ -59,10 +59,20 @@ const __dirname = path.dirname(__filename);
 
 // Database initialization with error handling
 let db: any;
+const dbFilePath = process.env.DATABASE_PATH || process.env.SQLITE_PATH || "presentations.db";
+
 try {
-  db = new Database("presentations.db");
+  const dbDir = path.dirname(dbFilePath);
+  if (dbDir && dbDir !== "." && !existsSync(dbDir)) {
+    mkdirSync(dbDir, { recursive: true });
+  }
+
+  db = new Database(dbFilePath);
   db.exec("PRAGMA foreign_keys = ON;");
-  console.log("Database initialized successfully");
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA synchronous = NORMAL;");
+  db.exec("PRAGMA busy_timeout = 5000;");
+  console.log(`Database initialized successfully at: ${dbFilePath}`);
 } catch (err) {
   console.error("Failed to initialize database:", err);
   process.exit(1);
@@ -939,7 +949,7 @@ const startServer = async () => {
     });
   }
 
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
