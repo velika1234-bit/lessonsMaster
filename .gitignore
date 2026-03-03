@@ -16,3 +16,7 @@ presentations.db
 
 # Lock files (use npm)
 yarn.lock
+-e 
+# Environment files
+*.env
+*.env.*
