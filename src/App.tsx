@@ -2315,24 +2315,28 @@ const HostView = ({ user }: { user: User }) => {
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
   useEffect(() => {
-    if (id && db) {
-      const docRef = doc(db, 'presentations', id);
-      getDoc(docRef).then(docSnap => {
-        if (docSnap.exists()) {
-          const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
-          if (data.slides) {
-            data.slides = data.slides.map((s: any) => {
-              if (s.type === 'matching' && !s.content.pairs) {
-                return { ...s, content: { ...s.content, pairs: [] } };
-              }
-              return s;
-            });
+    if (id) {
+      // Fetch from API instead of Firestore
+      fetch(`/api/presentations/${id}`, {
+        headers: { 'teacher-id': user.id }
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data && !data.error) {
+            if (data.slides) {
+              data.slides = data.slides.map((s: any) => {
+                if (s.type === 'matching' && !s.content.pairs) {
+                  return { ...s, content: { ...s.content, pairs: [] } };
+                }
+                return s;
+              });
+            }
+            setPresentationData(data);
           }
-          setPresentationData(data);
-        }
-      });
+        })
+        .catch(err => console.error("Failed to load presentation:", err));
     }
-  }, [id, db]);
+  }, [id, user.id]);
 
   useEffect(() => {
     if (timeLeft !== null && timeLeft > 0) {
