@@ -38,7 +38,9 @@ import {
   XCircle,
   Trophy,
   Link as LinkIcon,
-  Chrome
+  Chrome,
+  Shield,
+  ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -427,35 +429,36 @@ const ReportsDashboard = ({ user }: { user: User }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!db) {
-      setLoading(false);
-      return;
-    }
-    const q = query(collection(db, 'reports'), where('teacherId', '==', user.id));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
-      // Sort in memory to avoid index requirements
-      data.sort((a, b) => {
-        const dateA = a.createdAt?.toDate?.() || 0;
-        const dateB = b.createdAt?.toDate?.() || 0;
-        return dateB - dateA;
-      });
-      setReports(data);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching reports:", error);
-      setLoading(false);
-    });
-    return () => unsubscribe();
+    const fetchReports = async () => {
+      try {
+        const res = await fetch('/api/reports', {
+          headers: { 'teacher-id': user.id }
+        });
+        if (!res.ok) throw new Error('Failed to fetch');
+        const data = await res.json();
+        setReports(data);
+      } catch (error) {
+        console.error("Error fetching reports:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchReports();
   }, [user.id]);
 
   const deleteReport = async (id: string) => {
-    if (!db) {
-      alert('Грешка: Базата данни не е достъпна.');
-      return;
-    }
     if (!confirm('Сигурни ли сте, че искате да изтриете този доклад?')) return;
-    await deleteDoc(doc(db, 'reports', id));
+    try {
+      setReports(prev => prev.filter(r => r.id !== id));
+      const res = await fetch(`/api/reports/${id}`, {
+        method: 'DELETE',
+        headers: { 'teacher-id': user.id }
+      });
+      if (!res.ok) throw new Error('Delete failed');
+    } catch (err) {
+      console.error("Delete report failed", err);
+      alert("Грешка при изтриването на доклада.");
+    }
   };
 
   return (
@@ -483,7 +486,7 @@ const ReportsDashboard = ({ user }: { user: User }) => {
                   <History className="w-6 h-6" />
                 </div>
                 <div className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">
-                  {report.createdAt?.toDate ? report.createdAt.toDate().toLocaleDateString('bg-BG') : '...'}
+                  {report.createdAt ? new Date(report.createdAt).toLocaleDateString('bg-BG') : '...'}
                 </div>
               </div>
               <h3 className="text-xl font-black text-gray-900 mb-2 line-clamp-1">{report.presentationTitle}</h3>
@@ -519,21 +522,22 @@ const ReportDetail = ({ user }: { user: User }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!db) {
-      setLoading(false);
-      return;
-    }
-    const docRef = doc(db, 'reports', id!);
-    getDoc(docRef).then(docSnap => {
-      if (docSnap.exists()) {
-        setReport({ ...docSnap.data(), id: docSnap.id });
+    const fetchReport = async () => {
+      try {
+        const res = await fetch(`/api/reports/${id}`, {
+          headers: { 'teacher-id': user.id }
+        });
+        if (!res.ok) throw new Error('Failed to fetch');
+        const data = await res.json();
+        setReport(data);
+      } catch (err) {
+        console.error("Error fetching report:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-    }).catch(err => {
-      console.error("Error fetching report:", err);
-      setLoading(false);
-    });
-  }, [id]);
+    };
+    fetchReport();
+  }, [id, user.id]);
 
   const downloadPDF = async () => {
     const doc = new jsPDF();
@@ -559,7 +563,7 @@ const ReportDetail = ({ user }: { user: User }) => {
     doc.text(report.presentationTitle || 'Без заглавие', 105, 30, { align: "center" });
     
     doc.setFontSize(12);
-    const dateStr = report.createdAt?.toDate ? report.createdAt.toDate().toLocaleDateString('bg-BG') : '...';
+    const dateStr = report.createdAt ? new Date(report.createdAt).toLocaleDateString('bg-BG') : '...';
     doc.text(`Дата: ${dateStr}`, 20, 45);
     
     const tableData = report.data.students
@@ -706,54 +710,112 @@ const ReportDetail = ({ user }: { user: User }) => {
 const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => {
   const [presentations, setPresentations] = useState<Presentation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiSourceText, setAiSourceText] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!db) {
-      setLoading(false);
-      return;
-    }
-    const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Presentation));
-      // Sort in memory to avoid index requirements
-      data.sort((a: any, b: any) => {
-        const dateA = a.updatedAt?.toDate?.() || 0;
-        const dateB = b.updatedAt?.toDate?.() || 0;
-        return dateB - dateA;
-      });
-      setPresentations(data);
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching presentations:", error);
-      setLoading(false);
-    });
-    return () => unsubscribe();
+    const fetchPresentations = async () => {
+      try {
+        const res = await fetch('/api/presentations', {
+          headers: { 'teacher-id': user.id }
+        });
+        if (!res.ok) throw new Error('Failed to fetch');
+        const data = await res.json();
+        setPresentations(data);
+      } catch (error) {
+        console.error("Error fetching presentations:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPresentations();
+    // Poll for updates every 10 seconds since we don't have real-time sync for the list anymore
+    const interval = setInterval(fetchPresentations, 10000);
+    return () => clearInterval(interval);
   }, [user.id]);
 
   const createNew = async () => {
-    if (!db) {
-      alert('Грешка: Базата данни не е достъпна. Моля, проверете настройките на Firebase.');
+    try {
+      const res = await fetch('/api/presentations', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
+        body: JSON.stringify({ title: 'Нова презентация' })
+      });
+      const data = await res.json();
+      navigate(`/edit/${data.id}`);
+    } catch (err) {
+      alert('Грешка при създаване на урок.');
+    }
+  };
+
+  const generatePresentationWithAI = async () => {
+    if (!aiPrompt.trim() && !aiSourceText.trim()) return;
+    
+    if (!globalGeminiApiKey) await fetchConfig();
+    let ai = getAIInstance();
+    
+    if (!ai && (window as any).aistudio) {
+      const hasKey = await (window as any).aistudio.hasSelectedApiKey();
+      if (!hasKey) await (window as any).aistudio.openSelectKey();
+      ai = getAIInstance();
+    }
+
+    if (!ai) {
+      alert('Моля, конфигурирайте Gemini API ключ.');
       return;
     }
-    const docRef = await addDoc(collection(db, 'presentations'), {
-      title: 'Нова презентация',
-      teacherId: user.id,
-      slides: [],
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
-    navigate(`/edit/${docRef.id}`);
+
+    setIsGenerating(true);
+    try {
+      const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON обект за нова презентация на български език.
+      Формат: { "title": "...", "slides": [{ "type": "...", "content": { "title": "...", "body": "...", "options": [...], "imageUrl": "...", "hotspot": {...}, "labels": [...] } }] }
+      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+      Генерирайте между 5 и 10 слайда. Смесете информация с интерактивни въпроси.`;
+
+      const userPrompt = `Създай цялостна презентация въз основа на следното:
+      Тема: ${aiPrompt}
+      Изходен текст: ${aiSourceText}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: userPrompt,
+        config: { systemInstruction, responseMimeType: "application/json" }
+      });
+
+      const generatedData = JSON.parse(response.text);
+      
+      const res = await fetch('/api/presentations', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
+        body: JSON.stringify({
+          title: generatedData.title || aiPrompt || 'Нова презентация',
+          slides: generatedData.slides.map((s: any) => ({ ...s, id: nanoid(10) }))
+        })
+      });
+
+      const data = await res.json();
+      navigate(`/edit/${data.id}`);
+    } catch (error: any) {
+      console.error("AI Generation failed:", error);
+      alert(`Грешка при генерирането: ${error.message}`);
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   const uploadPresentation = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
-    if (!db) {
-      alert('Грешка: Базата данни не е достъпна. Моля, проверете настройките на Firebase.');
-      return;
-    }
 
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -765,24 +827,38 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
           throw new Error('Invalid JSON format');
         }
 
-        // Remove the old ID if it exists to let Firestore generate a new one
+        // Remove the old ID if it exists
         const { id, ...presentationData } = imported;
         
-        await addDoc(collection(db, 'presentations'), {
-          title: 'Импортиран урок',
-          slides: [],
-          ...presentationData,
-          teacherId: user.id,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp()
+        const res = await fetch('/api/presentations', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'teacher-id': user.id
+          },
+          body: JSON.stringify({
+            ...presentationData,
+            teacherId: user.id
+          })
         });
+
+        if (!res.ok) throw new Error('Upload failed');
         
         alert('Урокът е качен успешно!');
+        // Refresh the list
+        const listRes = await fetch('/api/presentations', {
+          headers: { 'teacher-id': user.id }
+        });
+        if (listRes.ok) {
+          const data = await listRes.json();
+          setPresentations(data);
+        }
+        
         // Reset input so the same file can be selected again
         event.target.value = '';
       } catch (err) {
         console.error("Upload error:", err);
-        alert('Невалиден файл или грешка при качване в базата данни.');
+        alert('Невалиден файл или грешка при качване.');
       }
     };
     reader.readAsText(file);
@@ -798,32 +874,24 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const deletePresentation = async (id: string) => {
-    if (!id) {
-      alert('Грешка: Невалиден идентификатор на презентация.');
-      return;
-    }
-
-    if (!db) {
-      alert('Грешка: Базата данни не е достъпна.');
-      return;
-    }
-    
+    if (!id) return;
     if (!confirm('Сигурни ли сте, че искате да изтриете този урок?')) return;
     
     try {
-      // Optimistic update
       setPresentations(prev => prev.filter(p => p.id !== id));
-      await deleteDoc(doc(db, 'presentations', id));
-    } catch (error) {
+      const res = await fetch(`/api/presentations/${id}`, {
+        method: 'DELETE',
+        headers: { 'teacher-id': user.id }
+      });
+      if (!res.ok) throw new Error('Delete failed');
+    } catch (error: any) {
       console.error("Delete failed:", error);
-      alert('Възникна грешка при изтриването на урока. Моля, опитайте отново.');
+      alert('Възникна грешка при изтриването.');
     }
   };
 
   const handleLogout = async () => {
-    if (auth) {
-      await signOut(auth);
-    }
+    await signOut(auth);
     onLogout();
   };
 
@@ -852,22 +920,113 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
         </div>
       </div>
 
-      <div className="flex justify-between items-center mb-8 bg-white/60 backdrop-blur-xl p-6 rounded-[2rem] border border-white shadow-xl shadow-slate-200/50">
-        <div className="flex gap-4">
-          <Button onClick={createNew} className="h-12 px-8">
-            <Plus className="w-5 h-5" /> Нов Урок
-          </Button>
-          <label className="cursor-pointer">
-            <div className="h-12 px-6 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 bg-white text-gray-600 border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 active:scale-95 shadow-sm">
-              <Download className="w-4 h-4" /> Качи урок
+        <div className="flex justify-between items-center mb-8 bg-white/60 backdrop-blur-xl p-6 rounded-[2rem] border border-white shadow-xl shadow-slate-200/50">
+          <div className="flex gap-4">
+            <Button onClick={createNew} className="h-12 px-8">
+              <Plus className="w-5 h-5" /> Нов Урок
+            </Button>
+            <Button onClick={() => setShowAiModal(true)} variant="secondary" className="h-12 px-6 border-indigo-200 text-indigo-600">
+              <Zap className="w-5 h-5" /> Създай с AI
+            </Button>
+            <label className="cursor-pointer">
+              <div className="h-12 px-6 rounded-xl font-semibold transition-all flex items-center justify-center gap-2 bg-white text-gray-600 border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 active:scale-95 shadow-sm">
+                <Download className="w-4 h-4" /> Качи урок
+              </div>
+              <input type="file" className="hidden" accept=".json" onChange={uploadPresentation} />
+            </label>
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="flex flex-col items-end">
+              <div className="text-[10px] font-black text-indigo-300 uppercase tracking-[0.2em]">
+                {presentations.length} ПРЕЗЕНТАЦИИ
+              </div>
+              <button 
+                onClick={async () => {
+                  if (confirm('ВНИМАНИЕ: Това ще изтрие ВСИЧКИ ваши уроци и отчети от сървъра завинаги. Сигурни ли сте?')) {
+                    await fetch('/api/user/purge', { 
+                      method: 'POST', 
+                      headers: { 'teacher-id': user.id } 
+                    });
+                    window.location.reload();
+                  }
+                }}
+                className="text-[9px] text-red-400 hover:text-red-600 font-bold uppercase mt-1 transition-colors"
+              >
+                Изтрий всички мои данни
+              </button>
             </div>
-            <input type="file" className="hidden" accept=".json" onChange={uploadPresentation} />
-          </label>
+          </div>
         </div>
-        <div className="text-[10px] font-black text-indigo-300 uppercase tracking-[0.2em]">
-          {presentations.length} ПРЕЗЕНТАЦИИ
+
+        <div className="mb-12 bg-emerald-50 border border-emerald-100 p-6 rounded-3xl flex items-start gap-4">
+          <ShieldCheck className="w-6 h-6 text-emerald-500 mt-1" />
+          <div>
+            <h4 className="font-bold text-emerald-900">Вашите данни са защитени</h4>
+            <p className="text-sm text-emerald-700 leading-relaxed">
+              Системата използва <b>ефимерно съхранение</b>. Данните на учениците се пазят само по време на активната сесия. 
+              Отчетите се съхраняват в криптирана база данни и се изтриват автоматично след 7 дни, освен ако не ги изтеглите като PDF.
+            </p>
+          </div>
         </div>
-      </div>
+
+      {/* AI Modal for Dashboard */}
+      <AnimatePresence>
+        {showAiModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[2.5rem] w-full max-w-2xl overflow-hidden shadow-2xl"
+            >
+              <div className="p-8 border-b border-gray-100 flex justify-between items-center bg-indigo-600 text-white">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
+                    <Zap className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-2xl font-bold">Създай урок с AI</h2>
+                    <p className="text-indigo-100 text-sm">Опишете темата и AI ще подготви всичко</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowAiModal(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+              
+              <div className="p-8 space-y-6">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Тема на урока</label>
+                  <input 
+                    type="text" 
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="напр. Слънчевата система, Българското възраждане..."
+                    className="w-full px-5 py-4 rounded-2xl border-2 border-gray-100 focus:border-indigo-500 outline-none transition-all text-lg"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Допълнителен текст или източник (незадължително)</label>
+                  <textarea 
+                    value={aiSourceText}
+                    onChange={(e) => setAiSourceText(e.target.value)}
+                    placeholder="Поставете текст от учебник или статия тук..."
+                    className="w-full h-40 px-5 py-4 rounded-2xl border-2 border-gray-100 focus:border-indigo-500 outline-none transition-all resize-none"
+                  />
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <Button variant="secondary" className="flex-1 h-14" onClick={() => setShowAiModal(false)}>Отказ</Button>
+                  <Button variant="primary" className="flex-[2] h-14 text-lg" onClick={generatePresentationWithAI} loading={isGenerating}>
+                    Генерирай Урок
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {loading ? (
         <div className="flex justify-center py-20">
@@ -881,44 +1040,46 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
                 <div className="h-32 bg-gray-50 rounded-xl mb-4 flex items-center justify-center text-gray-300 group-hover:bg-indigo-50 transition-colors">
                   <Layout className="w-12 h-12" />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">{p.title || 'Без заглавие'}</h3>
-                <div className="grid grid-cols-5 gap-1">
+                <h3 className="text-lg font-bold text-gray-900 mb-4 line-clamp-1">{p.title || 'Без заглавие'}</h3>
+                <div className="flex flex-wrap gap-2">
                   <Button 
                     variant="secondary" 
-                    className="col-span-2 px-1 text-[10px] h-9" 
+                    className="flex-1 text-xs h-10 px-3 min-w-[100px]" 
                     onClick={() => navigate(`/edit/${p.id}`)}
                     title="Редактиране"
                   >
-                    <Edit2 className="w-3 h-3" /> Редактирай
+                    <Edit2 className="w-4 h-4" /> Редактирай
                   </Button>
-                  <Button 
-                    variant="primary" 
-                    className="h-9 p-0 flex items-center justify-center" 
-                    onClick={() => navigate(`/host/${p.id}`)}
-                    title="Стартиране на урок"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                  </Button>
-                  <Button 
-                    variant="secondary" 
-                    className="h-9 p-0 flex items-center justify-center" 
-                    onClick={() => exportPresentation(p)}
-                    title="Изтегляне на файл"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                  </Button>
-                  <Button 
-                    variant="danger" 
-                    className="h-9 p-0 flex items-center justify-center" 
-                    onClick={(e: any) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      deletePresentation(p.id);
-                    }}
-                    title="Изтриване"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button 
+                      variant="primary" 
+                      className="w-10 h-10 p-0 flex items-center justify-center" 
+                      onClick={() => navigate(`/host/${p.id}`)}
+                      title="Стартиране на урок"
+                    >
+                      <Play className="w-4 h-4 fill-current" />
+                    </Button>
+                    <Button 
+                      variant="secondary" 
+                      className="w-10 h-10 p-0 flex items-center justify-center" 
+                      onClick={() => exportPresentation(p)}
+                      title="Изтегляне на файл"
+                    >
+                      <Download className="w-4 h-4" />
+                    </Button>
+                    <Button 
+                      variant="danger" 
+                      className="w-10 h-10 p-0 flex items-center justify-center" 
+                      onClick={(e: any) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        deletePresentation(p.id);
+                      }}
+                      title="Изтриване"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
                 </div>
               </Card>
             </div>
@@ -946,9 +1107,9 @@ const Editor = ({ user }: { user: User }) => {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiSourceText, setAiSourceText] = useState('');
   const [aiMode, setAiMode] = useState<'presentation' | 'quiz'>('presentation');
+  const [showAiModal, setShowAiModal] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addModalTab, setAddModalTab] = useState<'new' | 'existing' | 'import' | 'ai'>('new');
-  const canGenerateWithAi = Boolean(aiPrompt.trim() || aiSourceText.trim());
   const [otherPresentations, setOtherPresentations] = useState<Presentation[]>([]);
   const [selectedPresentationId, setSelectedPresentationId] = useState<string | null>(null);
   const [selectedPresentationSlides, setSelectedPresentationSlides] = useState<Slide[]>([]);
@@ -956,7 +1117,7 @@ const Editor = ({ user }: { user: User }) => {
   const fetchOtherPresentations = async () => {
     const q = query(collection(db, 'presentations'), where('teacherId', '==', user.id));
     const snapshot = await getDocs(q);
-    const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Presentation));
+    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Presentation));
     setOtherPresentations(data.filter((p: any) => p.id !== id));
   };
 
@@ -1018,11 +1179,8 @@ const Editor = ({ user }: { user: User }) => {
     }
   ];
 
-  const generateWithAI = async () => {
-    if (!canGenerateWithAi) {
-      alert('Моля, въведете тема или изходен текст за AI генерация.');
-      return;
-    }
+  const generateWithAI = async (mode: 'full' | 'single' = 'single') => {
+    if (!aiPrompt.trim() && !aiSourceText.trim()) return;
     
     // Ensure we have the latest config
     if (!globalGeminiApiKey) {
@@ -1052,22 +1210,23 @@ const Editor = ({ user }: { user: User }) => {
 
     setIsGenerating(true);
     try {
-      const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON масив от интерактивни слайдове на български език.
-      Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
-      Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
-      Важно: Генерирайте между 4 и 8 слайда. Ако е избран режим 'quiz', използвайте само типове въпроси.`;
+      const systemInstruction = mode === 'full' 
+        ? `Вие сте експерт по образование. Генерирайте JSON масив от 5 до 8 интерактивни слайда на български език за цялостен урок.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+          Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
+          Важно: Създайте логическа последователност от информация и въпроси.`
+        : `Вие сте експерт по образование. Генерирайте JSON масив от точно 1 интерактивен слайд на български език.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+          Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
+          Важно: Създайте съдържание, което точно отговаря на инструкцията.`;
 
-      let userPrompt = "";
-      if (aiMode === 'presentation') {
-        userPrompt = `Създай цялостна презентация въз основа на следното:
-        Тема: ${aiPrompt}
-        Изходен текст: ${aiSourceText}
-        Смеси информативни слайдове (title, text-image) с интерактивни въпроси (quiz-single, quiz-multi, boolean), за да ангажираш учениците.`;
-      } else {
-        userPrompt = `Създай тест (quiz), състоящ се САМО от интерактивни типове въпроси (quiz-single, quiz-multi, boolean, open-question, hotspot, labeling) въз основа на следното:
-        Тема: ${aiPrompt}
-        Изходен текст: ${aiSourceText}`;
-      }
+      const userPrompt = mode === 'full'
+        ? `Създай цялостен урок (5-8 слайда) въз основа на следното:
+          Тема/Инструкция: ${aiPrompt}
+          Изходен текст: ${aiSourceText}`
+        : `Добави 1 нов слайд към презентацията въз основа на следното:
+          Тема/Инструкция: ${aiPrompt}
+          Изходен текст: ${aiSourceText}`;
 
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
@@ -1089,7 +1248,7 @@ const Editor = ({ user }: { user: User }) => {
           slides: [...presentation.slides, ...generatedSlides.map((s: any) => ({ ...s, id: nanoid(10) }))]
         });
       }
-      setShowAddModal(false);
+      setShowAiModal(false);
       setAiPrompt('');
       setAiSourceText('');
     } catch (error: any) {
@@ -1112,41 +1271,36 @@ const Editor = ({ user }: { user: User }) => {
   };
 
   useEffect(() => {
-    if (!db) {
-      setLoading(false);
-      return;
-    }
-    const docRef = doc(db, 'presentations', id!);
-    const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = { ...docSnap.data(), id: docSnap.id } as Presentation;
-        if (data.slides) {
-          data.slides = data.slides.map((s: any) => {
-            if (s.type === 'matching' && !s.content.pairs) {
-              return { ...s, content: { ...s.content, pairs: [] } };
-            }
-            return s;
-          });
-        }
+    const fetchPresentation = async () => {
+      try {
+        const res = await fetch(`/api/presentations/${id}`, {
+          headers: { 'teacher-id': user.id }
+        });
+        if (!res.ok) throw new Error('Failed to fetch');
+        const data = await res.json();
         setPresentation(data);
+      } catch (error) {
+        console.error("Error fetching presentation:", error);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-    }, (error) => {
-      console.error("Error fetching presentation:", error);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [id]);
+    };
+    fetchPresentation();
+  }, [id, user.id]);
 
   const save = async () => {
     if (!presentation) return;
     setSaveStatus('saving');
     try {
-      const docRef = doc(db, 'presentations', id!);
-      await updateDoc(docRef, {
-        ...presentation,
-        updatedAt: serverTimestamp()
+      const res = await fetch(`/api/presentations/${id}`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
+        body: JSON.stringify(presentation)
       });
+      if (!res.ok) throw new Error('Save failed');
       setSaveStatus('saved');
     } catch (error) {
       console.error("Save failed:", error);
@@ -1237,7 +1391,7 @@ const Editor = ({ user }: { user: User }) => {
           </Button>
           <input 
             className="text-xl font-bold bg-transparent border-none focus:ring-0 w-64"
-            value={presentation.title}
+            value={presentation.title || ''}
             onChange={e => setPresentation({ ...presentation, title: e.target.value })}
           />
         </div>
@@ -1272,18 +1426,68 @@ const Editor = ({ user }: { user: User }) => {
             <Save className="w-4 h-4" />
             Запази
           </Button>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setShowAddModal(true);
-              setAddModalTab('ai');
-            }}
-          >
-            <Send className="w-4 h-4" /> AI Асистент
+          <Button variant="secondary" onClick={() => {
+            setAiPrompt('');
+            setAiSourceText('');
+            setShowAiModal(true);
+          }}>
+            <Zap className="w-4 h-4" /> AI Асистент
           </Button>
           <Button variant="primary" onClick={() => navigate(`/host/${id}`)}>Пусни</Button>
         </div>
       </header>
+
+      {/* AI Modal */}
+      <AnimatePresence>
+                {showAiModal && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <motion.div 
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.9, opacity: 0 }}
+                      className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-8"
+                    >
+                      <div className="flex justify-between items-center mb-6">
+                        <div className="flex items-center gap-3">
+                          <Zap className="w-6 h-6 text-indigo-600" />
+                          <h3 className="text-2xl font-bold">Генерирай цял урок</h3>
+                        </div>
+                        <Button variant="ghost" onClick={() => setShowAiModal(false)}><X className="w-5 h-5" /></Button>
+                      </div>
+                      <p className="text-gray-500 mb-6">Въведете тема и AI ще създаде последователност от 5-8 слайда за вас.</p>
+                      
+                      <div className="space-y-4 mb-6">
+                        <div>
+                          <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Тема на урока</label>
+                          <input 
+                            type="text"
+                            className="w-full p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500"
+                            placeholder="Напр. Слънчевата система за 4-ти клас..."
+                            value={aiPrompt || ''}
+                            onChange={e => setAiPrompt(e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Изходен текст (по желание)</label>
+                          <textarea 
+                            className="w-full h-32 p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500"
+                            placeholder="Поставете текст от учебник..."
+                            value={aiSourceText || ''}
+                            onChange={e => setAiSourceText(e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-3">
+                        <Button variant="secondary" className="flex-1" onClick={() => setShowAiModal(false)}>Отказ</Button>
+                        <Button variant="primary" className="flex-1" onClick={() => generateWithAI('full')} loading={isGenerating}>
+                          Генерирай
+                        </Button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+      </AnimatePresence>
 
       {/* Add Slide Modal */}
       <AnimatePresence>
@@ -1417,36 +1621,19 @@ const Editor = ({ user }: { user: User }) => {
                         <Zap className="w-8 h-8" />
                       </div>
                       <div>
-                        <h3 className="text-2xl font-bold">Генерирай с AI</h3>
-                        <p className="text-gray-500 text-sm">Опишете темата или поставете текст, от който да създадем урока.</p>
+                        <h3 className="text-2xl font-bold">Добави слайдове с AI</h3>
+                        <p className="text-gray-500 text-sm">Опишете темата или поставете текст, за да генерирате нови слайдове към този урок.</p>
                       </div>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4 mb-6">
-                      <button 
-                        onClick={() => setAiMode('presentation')}
-                        className={`p-4 rounded-xl border-2 transition-all text-left ${aiMode === 'presentation' ? 'border-indigo-600 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}
-                      >
-                        <div className="font-bold mb-1">Пълна презентация</div>
-                        <div className="text-xs text-gray-500">Информативни слайдове и въпроси</div>
-                      </button>
-                      <button 
-                        onClick={() => setAiMode('quiz')}
-                        className={`p-4 rounded-xl border-2 transition-all text-left ${aiMode === 'quiz' ? 'border-indigo-600 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}
-                      >
-                        <div className="font-bold mb-1">Само тест</div>
-                        <div className="text-xs text-gray-500">Само интерактивни въпроси</div>
-                      </button>
                     </div>
 
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Тема или заглавие</label>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Какъв слайд искате?</label>
                         <input 
                           type="text"
                           className="w-full p-4 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 text-lg"
-                          placeholder="Напр. Слънчевата система за 4-ти клас..."
-                          value={aiPrompt}
+                          placeholder="Напр. Обясни фотосинтезата, Създай въпрос за..."
+                          value={aiPrompt || ''}
                           onChange={e => setAiPrompt(e.target.value)}
                         />
                       </div>
@@ -1454,8 +1641,8 @@ const Editor = ({ user }: { user: User }) => {
                         <label className="block text-xs font-bold text-gray-400 uppercase mb-2 ml-1">Изходен текст (по желание)</label>
                         <textarea 
                           className="w-full h-48 p-4 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 text-base"
-                          placeholder="Поставете тук текста, от който искате да се генерират слайдовете..."
-                          value={aiSourceText}
+                          placeholder="Поставете тук текста, от който искате да се генерира слайда..."
+                          value={aiSourceText || ''}
                           onChange={e => setAiSourceText(e.target.value)}
                         />
                       </div>
@@ -1464,11 +1651,10 @@ const Editor = ({ user }: { user: User }) => {
                     <Button 
                       variant="primary" 
                       className="w-full h-16 text-xl shadow-xl shadow-indigo-100 mt-8" 
-                      onClick={generateWithAI} 
+                      onClick={() => generateWithAI('single')} 
                       loading={isGenerating}
-                      disabled={!canGenerateWithAi}
                     >
-                      Генерирай {aiMode === 'presentation' ? 'Презентация' : 'Тест'}
+                      Генерирай 1 слайд
                     </Button>
                   </div>
                 )}
@@ -1640,7 +1826,7 @@ const Editor = ({ user }: { user: User }) => {
                         color: activeSlide.content.titleColor || '#000000'
                       }}
                       placeholder="Заглавие на слайда"
-                      value={activeSlide.content.title}
+                      value={activeSlide.content.title || ''}
                       onChange={e => updateContent({ title: e.target.value })}
                     />
                   </div>
@@ -1650,7 +1836,7 @@ const Editor = ({ user }: { user: User }) => {
                       <input 
                         type="number"
                         className="w-16 text-center text-xl font-black text-indigo-600 bg-transparent border-none focus:ring-0"
-                        value={activeSlide.points}
+                        value={activeSlide.points || 0}
                         onChange={e => {
                           const newSlides = [...presentation.slides];
                           newSlides[activeSlideIndex] = { ...activeSlide, points: parseInt(e.target.value) || 0 };
@@ -1720,7 +1906,7 @@ const Editor = ({ user }: { user: User }) => {
                           color: activeSlide.content.bodyColor || '#4b5563'
                         }}
                         placeholder="Вашият текст тук..."
-                        value={activeSlide.content.body}
+                        value={activeSlide.content.body || ''}
                         onChange={e => updateContent({ body: e.target.value })}
                       />
                     </div>
@@ -1740,7 +1926,7 @@ const Editor = ({ user }: { user: User }) => {
                         <input 
                           className="w-full p-2 border border-gray-200 rounded-lg text-xs"
                           placeholder="URL на снимка"
-                          value={activeSlide.content.imageUrl}
+                          value={activeSlide.content.imageUrl || ''}
                           onChange={e => updateContent({ imageUrl: e.target.value })}
                         />
                         {activeSlide.content.imageUrl && (
@@ -1765,7 +1951,7 @@ const Editor = ({ user }: { user: User }) => {
                       <input 
                         className="w-full p-2 border border-gray-200 rounded-lg"
                         placeholder="https://www.youtube.com/watch?v=..."
-                        value={activeSlide.content.videoUrl}
+                        value={activeSlide.content.videoUrl || ''}
                         onChange={e => updateContent({ videoUrl: e.target.value })}
                       />
                     </div>
@@ -1806,7 +1992,7 @@ const Editor = ({ user }: { user: User }) => {
                         </button>
                         <input 
                           className="flex-1 p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                          value={opt.text}
+                          value={opt.text || ''}
                           onChange={e => {
                             const newOpts = [...(activeSlide.content.options || [])];
                             newOpts[idx].text = e.target.value;
@@ -1859,7 +2045,7 @@ const Editor = ({ user }: { user: User }) => {
                       <input 
                         className="w-full p-2 border border-gray-200 rounded-lg text-xs"
                         placeholder="URL на снимка"
-                        value={activeSlide.content.imageUrl}
+                        value={activeSlide.content.imageUrl || ''}
                         onChange={e => updateContent({ imageUrl: e.target.value })}
                       />
                     </div>
@@ -1954,7 +2140,7 @@ const Editor = ({ user }: { user: User }) => {
                       <input 
                         className="w-full p-2 border border-gray-200 rounded-lg"
                         placeholder="https://example.com/diagram.jpg"
-                        value={activeSlide.content.imageUrl}
+                        value={activeSlide.content.imageUrl || ''}
                         onChange={e => updateContent({ imageUrl: e.target.value })}
                       />
                     </div>
@@ -1994,7 +2180,7 @@ const Editor = ({ user }: { user: User }) => {
                         <div key={label.id} className="flex gap-2">
                           <input 
                             className="flex-1 p-2 border border-gray-200 rounded-lg"
-                            value={label.text}
+                            value={label.text || ''}
                             onChange={e => {
                               const newLabels = [...(activeSlide.content.labels || [])];
                               newLabels[idx].text = e.target.value;
@@ -2031,7 +2217,7 @@ const Editor = ({ user }: { user: User }) => {
                               <input 
                                 className="w-full p-2 border border-gray-200 rounded-lg text-sm"
                                 placeholder="Ляв елемент"
-                                value={pair.left}
+                                value={pair.left || ''}
                                 onChange={e => {
                                   const newPairs = [...(activeSlide.content.pairs || [])];
                                   newPairs[idx].left = e.target.value;
@@ -2041,7 +2227,7 @@ const Editor = ({ user }: { user: User }) => {
                               <input 
                                 className="w-full p-2 border border-gray-200 rounded-lg text-sm"
                                 placeholder="Десен елемент"
-                                value={pair.right}
+                                value={pair.right || ''}
                                 onChange={e => {
                                   const newPairs = [...(activeSlide.content.pairs || [])];
                                   newPairs[idx].right = e.target.value;
@@ -2125,25 +2311,15 @@ const HostView = ({ user }: { user: User }) => {
   const [isConnected, setIsConnected] = useState(false);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
-  const reportSavedRef = useRef(false);
-  const allResponsesRef = useRef<Record<string, Record<number, any>>>({});
-  const currentSlideIndexRef = useRef(-1);
-  const presentationDataRef = useRef<Presentation | null>(null);
-  const [currentSlideIndex, setCurrentSlideIndex] = useState(-1);
   const navigate = useNavigate();
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
   useEffect(() => {
-    reportSavedRef.current = false;
-    allResponsesRef.current = {};
-    currentSlideIndexRef.current = -1;
-    setCurrentSlideIndex(-1);
-
     if (id && db) {
       const docRef = doc(db, 'presentations', id);
       getDoc(docRef).then(docSnap => {
         if (docSnap.exists()) {
-          const data = { ...docSnap.data(), id: docSnap.id } as Presentation;
+          const data = { id: docSnap.id, ...docSnap.data() } as Presentation;
           if (data.slides) {
             data.slides = data.slides.map((s: any) => {
               if (s.type === 'matching' && !s.content.pairs) {
@@ -2153,17 +2329,10 @@ const HostView = ({ user }: { user: User }) => {
             });
           }
           setPresentationData(data);
-          presentationDataRef.current = data;
-        } else {
-          presentationDataRef.current = null;
         }
       });
     }
   }, [id, db]);
-
-  useEffect(() => {
-    currentSlideIndexRef.current = currentSlideIndex;
-  }, [currentSlideIndex]);
 
   useEffect(() => {
     if (timeLeft !== null && timeLeft > 0) {
@@ -2173,41 +2342,6 @@ const HostView = ({ user }: { user: User }) => {
     }
     return () => clearTimeout(timerRef.current);
   }, [timeLeft]);
-
-  const buildSessionReportData = (finalLeaderboard: any[]) => {
-    const activePresentation = presentationDataRef.current;
-    if (!activePresentation) return null;
-
-    const studentsWithResponses = finalLeaderboard.map((student: any) => ({
-      ...student,
-      responses: allResponsesRef.current[student.id] || {}
-    }));
-
-    return {
-      presentationTitle: activePresentation.title,
-      date: new Date().toLocaleDateString("bg-BG"),
-      students: studentsWithResponses,
-      slides: activePresentation.slides
-    };
-  };
-
-  const persistReport = async (reportData: any) => {
-    const activePresentation = presentationDataRef.current;
-    if (!db || !activePresentation || reportSavedRef.current) return;
-
-    try {
-      await addDoc(collection(db, 'reports'), {
-        teacherId: user.id,
-        presentationId: activePresentation.id,
-        presentationTitle: activePresentation.title,
-        data: reportData,
-        createdAt: serverTimestamp()
-      });
-      reportSavedRef.current = true;
-    } catch (error) {
-      console.error('Failed to persist report in Firestore:', error);
-    }
-  };
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2227,10 +2361,6 @@ const HostView = ({ user }: { user: User }) => {
           setPin(msg.pin);
           if (msg.students) setStudents(msg.students);
           if (msg.currentSlide) setCurrentSlide(msg.currentSlide);
-          if (typeof msg.currentSlideIndex === 'number') {
-            setCurrentSlideIndex(msg.currentSlideIndex);
-            currentSlideIndexRef.current = msg.currentSlideIndex;
-          }
           break;
         case 'STUDENT_JOINED':
           setStudents(prev => [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }]);
@@ -2240,9 +2370,6 @@ const HostView = ({ user }: { user: User }) => {
           break;
         case 'SLIDE_UPDATE':
           console.log("Received slide update:", msg.slide);
-          const incomingIndex = typeof msg.index === 'number' ? msg.index : -1;
-          setCurrentSlideIndex(incomingIndex);
-          currentSlideIndexRef.current = incomingIndex;
           setCurrentSlide(msg.slide);
           setResponses({});
           if (msg.slide?.duration) {
@@ -2256,28 +2383,33 @@ const HostView = ({ user }: { user: User }) => {
           break;
         case 'RESPONSE_RECEIVED':
           setResponses(prev => ({ ...prev, [msg.id]: msg.response }));
-          if (currentSlideIndexRef.current >= 0) {
-            const studentHistory = allResponsesRef.current[msg.id] || {};
-            allResponsesRef.current[msg.id] = { ...studentHistory, [currentSlideIndexRef.current]: msg.response };
-          }
           if (msg.leaderboard) setLeaderboard(msg.leaderboard);
           break;
-        case 'PRESENTATION_FINISHED': {
-          const finalLeaderboard = (msg.leaderboard || []).map((student: any) => ({
-            ...student,
-            id: student.id || student.name
-          }));
-          setLeaderboard(finalLeaderboard);
+        case 'PRESENTATION_FINISHED':
+          setLeaderboard(msg.leaderboard);
           setShowLeaderboard(true);
           setCurrentSlide(null);
           setIsFinished(true);
-
-          const reportData = buildSessionReportData(finalLeaderboard);
-          if (reportData) {
-            void persistReport(reportData);
+          // Auto-save report to database when finished via API
+          if (presentationData) {
+            fetch('/api/reports', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'teacher-id': user.id
+              },
+              body: JSON.stringify({
+                presentationId: presentationData.id,
+                presentationTitle: presentationData.title,
+                data: {
+                  students: msg.leaderboard,
+                  slides: presentationData.slides,
+                  date: new Date().toLocaleDateString("bg-BG")
+                }
+              })
+            }).catch(err => console.error("Auto-save report failed", err));
           }
           break;
-        }
       }
     };
 
@@ -2289,37 +2421,34 @@ const HostView = ({ user }: { user: User }) => {
   };
 
   const finishSession = async () => {
-    const finalLeaderboard = [...leaderboard]
-      .sort((a: any, b: any) => b.score - a.score)
-      .map((student: any) => ({ ...student, id: student.id || student.name }));
-
-    setLeaderboard(finalLeaderboard);
-    setShowLeaderboard(true);
-    setCurrentSlide(null);
-    setIsFinished(true);
-
-    const reportData = buildSessionReportData(finalLeaderboard);
-    if (reportData) {
-      await persistReport(reportData);
+    if (!pin) return;
+    try {
+      const res = await fetch(`/api/sessions/${pin}/report`);
+      const data = await res.json();
+      
+      await fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          presentationId: id,
+          presentationTitle: data.presentationTitle,
+          data: data
+        })
+      });
+      
+      navigate('/reports');
+    } catch (err) {
+      console.error("Failed to save report", err);
+      navigate('/');
     }
-
-    navigate('/reports');
   };
 
   const downloadReport = async () => {
     if (!pin) return;
-
-    const sortedLeaderboard = [...leaderboard]
-      .sort((a: any, b: any) => b.score - a.score)
-      .map((student: any) => ({ ...student, id: student.id || student.name }));
-
-    const data = buildSessionReportData(sortedLeaderboard);
-    if (!data) {
-      alert('Липсват данни за отчет.');
-      return;
-    }
-
     try {
+      const res = await fetch(`/api/sessions/${pin}/report`);
+      const data = await res.json();
+      
       const doc = new jsPDF();
       
       // Add Cyrillic support by loading a font
@@ -2458,6 +2587,18 @@ const HostView = ({ user }: { user: User }) => {
     </div>
   );
 
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
+
+  const startPresentation = () => {
+    if (!pin) return;
+    ws.current?.send(JSON.stringify({ 
+      type: 'START_PRESENTATION', 
+      pin, 
+      presentationId: id,
+      privacyMode: isPrivacyMode 
+    }));
+  };
+
   // Lobby or Finished
   if (!currentSlide) {
     const joinUrl = `${window.location.origin}/join?pin=${pin}`;
@@ -2523,7 +2664,7 @@ const HostView = ({ user }: { user: User }) => {
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-2xl">
               <QRCodeSVG 
-                value={joinUrl} 
+                value={joinUrl || ''} 
                 size={200}
                 level="H"
                 includeMargin={false}
@@ -2578,12 +2719,25 @@ const HostView = ({ user }: { user: User }) => {
 
         <Button 
           variant="primary" 
-          className="w-full max-w-md mx-auto h-16 text-xl shadow-xl"
-          onClick={() => ws.current?.send(JSON.stringify({ type: 'START_PRESENTATION', pin, presentationId: id }))}
+          className="w-full max-w-md mx-auto h-16 text-xl shadow-xl mb-4"
+          onClick={startPresentation}
           disabled={students.length === 0 || (presentationData?.slides.length === 0)}
         >
           Започни Презентацията
         </Button>
+
+        <div className="flex items-center justify-center gap-3 text-white/60">
+          <input 
+            type="checkbox" 
+            id="privacy-mode" 
+            checked={isPrivacyMode}
+            onChange={(e) => setIsPrivacyMode(e.target.checked)}
+            className="w-5 h-5 rounded border-white/20 bg-white/10 text-indigo-500 focus:ring-indigo-500"
+          />
+          <label htmlFor="privacy-mode" className="text-sm font-bold flex items-center gap-2 cursor-pointer select-none">
+            <Shield className="w-4 h-4" /> Режим за поверителност (Анонимни ученици в отчета)
+          </label>
+        </div>
       </div>
     );
   }
@@ -2957,7 +3111,7 @@ const StudentJoin = () => {
               <input 
                 className="w-full h-16 text-center text-4xl font-black tracking-widest border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:ring-0"
                 maxLength={6}
-                value={pin}
+                value={pin || ''}
                 onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
                 placeholder="000000"
               />
@@ -2967,7 +3121,7 @@ const StudentJoin = () => {
               <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Вашето Име</label>
               <input 
                 className="w-full h-16 text-center text-2xl font-bold border-2 border-gray-200 rounded-xl focus:border-indigo-500 focus:ring-0"
-                value={name}
+                value={name || ''}
                 onChange={e => setName(e.target.value)}
                 placeholder="Име"
                 autoFocus
@@ -3332,7 +3486,7 @@ const StudentView = () => {
               disabled={submitted}
               className="flex-1 p-6 text-xl border-2 border-gray-200 rounded-3xl focus:border-indigo-500 focus:ring-0 resize-none"
               placeholder={currentSlide.content.placeholder || "Напишете вашия отговор тук..."}
-              value={openAnswer}
+              value={openAnswer || ''}
               onChange={e => setOpenAnswer(e.target.value)}
             />
             {!submitted && (

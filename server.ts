@@ -12,6 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const db = new Database("presentations.db");
+db.exec("PRAGMA foreign_keys = ON;");
 
 // Initialize database
 db.exec(`
@@ -39,6 +40,7 @@ db.exec(`
     presentation_id TEXT NOT NULL,
     presentation_title TEXT NOT NULL,
     data TEXT NOT NULL,
+    privacy_mode INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (presentation_id) REFERENCES presentations(id) ON DELETE CASCADE
@@ -69,10 +71,14 @@ try {
   // Column already exists
 }
 
-// Cleanup old reports (older than 3 days)
+try {
+  db.prepare("ALTER TABLE reports ADD COLUMN privacy_mode INTEGER DEFAULT 0").run();
+} catch (e) {}
+
+// Cleanup old reports (older than 7 days)
 const cleanupOldReports = () => {
   try {
-    const result = db.prepare("DELETE FROM reports WHERE created_at < datetime('now', '-3 days')").run();
+    const result = db.prepare("DELETE FROM reports WHERE created_at < datetime('now', '-7 days')").run();
     if (result.changes > 0) {
       console.log(`Cleaned up ${result.changes} old reports.`);
     }
@@ -96,6 +102,7 @@ const rooms = new Map<string, {
   host: WebSocket;
   presentationId: string;
   currentSlideIndex: number;
+  privacyMode: boolean;
   students: Map<string, { 
     ws: WebSocket; 
     name: string; 
@@ -218,32 +225,65 @@ app.get("/api/debug/check-email", (req, res) => {
   res.json({ count: users.length, users });
 });
 
+// Helper to ensure teacher exists in SQLite (fallback for session mismatch)
+const ensureTeacher = (id: string, name: string = "Учител") => {
+  const user = db.prepare("SELECT id FROM users WHERE id = ?").get(id);
+  if (!user) {
+    console.log("Auto-creating user record for sync:", id);
+    db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
+      id, 
+      `${id}@internal.system`, 
+      "synced-session", 
+      name
+    );
+  }
+};
+
 app.get("/api/presentations", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
+  const teacherId = req.headers["teacher-id"] as string;
   if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+  ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM presentations WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
   res.json(rows);
 });
 
 app.post("/api/presentations", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
+  const teacherId = req.headers["teacher-id"] as string;
   if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  const { title } = req.body;
+  ensureTeacher(teacherId);
+  const { title, slides, theme, globalBackgroundImage } = req.body;
   const id = nanoid(10);
-  db.prepare("INSERT INTO presentations (id, teacher_id, title) VALUES (?, ?, ?)").run(id, teacherId, title);
   
-  // Add a default first slide
-  const defaultContent = JSON.stringify({
-    title: "Добре дошли в новия урок!",
-    text: "Това е вашият първи слайд. Можете да го редактирате оттук.",
-    backgroundColor: "#ffffff",
-    titleColor: "#1e293b",
-    titleSize: 40
-  });
-  db.prepare("INSERT INTO slides (id, presentation_id, type, content, points, \"order\") VALUES (?, ?, ?, ?, ?, ?)")
-    .run(nanoid(10), id, "text-image", defaultContent, 0, 0);
+  try {
+    const transaction = db.transaction(() => {
+      db.prepare("INSERT INTO presentations (id, teacher_id, title, theme, globalBackgroundImage) VALUES (?, ?, ?, ?, ?)")
+        .run(id, teacherId, title || 'Нова презентация', theme || 'light', globalBackgroundImage || null);
+      
+      if (slides && Array.isArray(slides)) {
+        const insertSlide = db.prepare("INSERT INTO slides (id, presentation_id, type, content, points, \"order\") VALUES (?, ?, ?, ?, ?, ?)");
+        slides.forEach((slide: any, index: number) => {
+          insertSlide.run(nanoid(10), id, slide.type, JSON.stringify(slide.content), slide.points || 0, index);
+        });
+      } else {
+        // Add a default first slide if none provided
+        const defaultContent = JSON.stringify({
+          title: "Добре дошли в новия урок!",
+          text: "Това е вашият първи слайд. Можете да го редактирате оттук.",
+          backgroundColor: "#ffffff",
+          titleColor: "#1e293b",
+          titleSize: 40
+        });
+        db.prepare("INSERT INTO slides (id, presentation_id, type, content, points, \"order\") VALUES (?, ?, ?, ?, ?, ?)")
+          .run(nanoid(10), id, "text-image", defaultContent, 0, 0);
+      }
+    });
 
-  res.json({ id, title });
+    transaction();
+    res.json({ id, title });
+  } catch (error: any) {
+    console.error("Failed to create presentation:", error);
+    res.status(500).json({ error: "Failed to create presentation" });
+  }
 });
 
 app.get("/api/presentations/:id", (req, res) => {
@@ -303,28 +343,69 @@ app.delete("/api/presentations/:id", (req, res) => {
 });
 
 app.get("/api/reports", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
+  const teacherId = req.headers["teacher-id"] as string;
   if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+  ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM reports WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
   res.json(rows.map((r: any) => ({ ...r, data: JSON.parse(r.data) })));
 });
 
 app.get("/api/reports/:id", (req, res) => {
-  const teacherId = req.headers["teacher-id"];
+  const teacherId = req.headers["teacher-id"] as string;
   if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+  ensureTeacher(teacherId);
   const row = db.prepare("SELECT * FROM reports WHERE id = ? AND teacher_id = ?").get(req.params.id, teacherId);
   if (!row) return res.status(404).json({ error: "Report not found" });
   res.json({ ...row, data: JSON.parse(row.data) });
 });
 
 app.post("/api/reports", (req, res) => {
+  const teacherId = req.headers["teacher-id"] as string;
+  if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
+  ensureTeacher(teacherId);
+  const { presentationId, presentationTitle, data, privacyMode } = req.body;
+  const id = nanoid(10);
+  
+  // If privacy mode is on, anonymize student names in the data
+  let finalData = data;
+  if (privacyMode) {
+    const anonymizedStudents = data.students.map((s: any, idx: number) => ({
+      ...s,
+      name: `Ученик ${idx + 1}`
+    }));
+    finalData = { ...data, students: anonymizedStudents };
+  }
+
+  // Check if presentation exists, if not, we still save the report but without FK constraint issues
+  const presentationExists = db.prepare("SELECT id FROM presentations WHERE id = ?").get(presentationId);
+  const finalPresentationId = presentationExists ? presentationId : 'deleted';
+
+  // If it doesn't exist and we haven't created the 'deleted' placeholder, do it once
+  if (!presentationExists) {
+    const placeholder = db.prepare("SELECT id FROM presentations WHERE id = 'deleted'").get();
+    if (!placeholder) {
+      db.prepare("INSERT INTO presentations (id, teacher_id, title) VALUES ('deleted', ?, 'Изтрит урок')").run(teacherId);
+    }
+  }
+
+  db.prepare("INSERT INTO reports (id, teacher_id, presentation_id, presentation_title, data, privacy_mode) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(id, teacherId, finalPresentationId, presentationTitle, JSON.stringify(finalData), privacyMode ? 1 : 0);
+  res.json({ id });
+});
+
+app.post("/api/user/purge", (req, res) => {
   const teacherId = req.headers["teacher-id"];
   if (!teacherId) return res.status(401).json({ error: "Unauthorized" });
-  const { presentationId, presentationTitle, data } = req.body;
-  const id = nanoid(10);
-  db.prepare("INSERT INTO reports (id, teacher_id, presentation_id, presentation_title, data) VALUES (?, ?, ?, ?, ?)")
-    .run(id, teacherId, presentationId, presentationTitle, JSON.stringify(data));
-  res.json({ id });
+  
+  try {
+    db.transaction(() => {
+      db.prepare("DELETE FROM reports WHERE teacher_id = ?").run(teacherId);
+      db.prepare("DELETE FROM presentations WHERE teacher_id = ?").run(teacherId);
+    })();
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Purge failed" });
+  }
 });
 
 app.delete("/api/reports/:id", (req, res) => {
@@ -369,6 +450,7 @@ wss.on("connection", (ws) => {
               host: ws,
               presentationId: message.presentationId,
               currentSlideIndex: -1,
+              privacyMode: false,
               students: new Map()
             });
           }
@@ -467,6 +549,7 @@ wss.on("connection", (ws) => {
             currentRoomPin = pin; // Ensure it's set for future messages
             if (message.type === "START_PRESENTATION") {
               room.currentSlideIndex = 0;
+              room.privacyMode = !!message.privacyMode;
             } else {
               room.currentSlideIndex++;
             }
@@ -482,11 +565,18 @@ wss.on("connection", (ws) => {
             
             if (!nextSlide && room.currentSlideIndex >= slides.length) {
               // End of presentation
+              const leaderboard = Array.from(room.students.values())
+                .map((s, idx) => ({ 
+                  name: room.privacyMode ? `Ученик ${idx + 1}` : s.name, 
+                  score: s.score, 
+                  avatarSeed: s.avatarSeed 
+                }))
+                .sort((a, b) => b.score - a.score);
+
               const finalUpdate = {
                 type: "PRESENTATION_FINISHED",
-                leaderboard: Array.from(room.students.values())
-                  .map(s => ({ name: s.name, score: s.score, avatarSeed: s.avatarSeed }))
-                  .sort((a, b) => b.score - a.score)
+                leaderboard: leaderboard,
+                privacyMode: room.privacyMode
               };
               if (room.host.readyState === WebSocket.OPEN) {
                 room.host.send(JSON.stringify(finalUpdate));
