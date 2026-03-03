@@ -2587,6 +2587,8 @@ const HostView = ({ user }: { user: User }) => {
     });
   }, [currentSlide, responses]);
 
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
+
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
       <div className="text-center">
@@ -2595,8 +2597,6 @@ const HostView = ({ user }: { user: User }) => {
       </div>
     </div>
   );
-
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
 
   const startPresentation = () => {
     if (!pin) return;
