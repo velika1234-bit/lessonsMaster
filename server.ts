@@ -56,8 +56,16 @@ const authenticateToken = (req: express.Request, res: express.Response, next: ex
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database("presentations.db");
-db.exec("PRAGMA foreign_keys = ON;");
+// Database initialization with error handling
+let db: any;
+try {
+  db = new Database("presentations.db");
+  db.exec("PRAGMA foreign_keys = ON;");
+  console.log("Database initialized successfully");
+} catch (err) {
+  console.error("Failed to initialize database:", err);
+  process.exit(1);
+}
 
 // Initialize database
 db.exec(`
@@ -509,8 +517,12 @@ app.get("/api/config", (req, res) => {
   });
 });
 
-// Health check endpoint for Railway
+// Health check endpoint for Railway - MUST be before static file serving
 app.get("/health", (req, res) => {
+  res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
@@ -880,23 +892,35 @@ app.get("/api/sessions/:pin/report", (req, res) => {
 
 // In production, serve static files. In development, use Vite middleware.
 const startServer = async () => {
+  console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
+  console.log(`__dirname: ${__dirname}`);
+  
   if (process.env.NODE_ENV !== "production") {
+    console.log("Loading Vite dev server...");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
+    console.log("Vite middleware loaded");
   } else {
     // Serve built static files in production
-    app.use(express.static(path.join(__dirname, "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(__dirname, "dist", "index.html"));
+    const distPath = path.join(__dirname, "dist");
+    console.log(`Serving static files from: ${distPath}`);
+    app.use(express.static(distPath));
+    app.get("*", (req, res, next) => {
+      // Skip API and WebSocket routes
+      if (req.path.startsWith('/api') || req.path === '/health') {
+        return next();
+      }
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Health check: http://localhost:${PORT}/health`);
   });
 };
 

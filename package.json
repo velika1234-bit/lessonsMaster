@@ -8,8 +8,9 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "npm run build:frontend",
+    "build": "npm run build:frontend && npm rebuild better-sqlite3",
     "build:frontend": "vite build",
+    "postinstall": "npm rebuild better-sqlite3 || true",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
