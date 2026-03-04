@@ -891,6 +891,11 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
+    if (!auth) {
+      onLogout();
+      return;
+    }
+
     await signOut(auth);
     onLogout();
   };
@@ -2430,19 +2435,28 @@ const HostView = ({ user }: { user: User }) => {
       const res = await fetch(`/api/sessions/${pin}/report`);
       const data = await res.json();
       
-      await fetch('/api/reports', {
+      const saveResponse = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
         body: JSON.stringify({
           presentationId: id,
           presentationTitle: data.presentationTitle,
           data: data
         })
       });
-      
+
+      if (!saveResponse.ok) {
+        const errorBody = await saveResponse.text();
+        throw new Error(`Report save failed (${saveResponse.status}): ${errorBody}`);
+      }
+
       navigate('/reports');
     } catch (err) {
       console.error("Failed to save report", err);
+      alert('Не успяхме да запазим доклада. Моля, опитайте отново.');
       navigate('/');
     }
   };
@@ -2582,6 +2596,8 @@ const HostView = ({ user }: { user: User }) => {
     });
   }, [currentSlide, responses]);
 
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
+
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
       <div className="text-center">
@@ -2590,8 +2606,6 @@ const HostView = ({ user }: { user: User }) => {
       </div>
     </div>
   );
-
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
 
   const startPresentation = () => {
     if (!pin) return;
