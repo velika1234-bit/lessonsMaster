@@ -2423,7 +2423,6 @@ const HostView = ({ user }: { user: User }) => {
             const token = localStorage.getItem('token');
             void (async () => {
               try {
-                setIsSavingReport(true);
                 const saveResponse = await fetch('/api/reports', {
                   method: 'POST',
                   headers: {
@@ -2646,6 +2645,8 @@ const HostView = ({ user }: { user: User }) => {
       };
     });
   }, [currentSlide, responses]);
+
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
 
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
