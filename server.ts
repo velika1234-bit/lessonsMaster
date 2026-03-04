@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import path from "path";
+import { existsSync, mkdirSync } from "fs";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import pkg from "jsonwebtoken";
@@ -58,10 +59,20 @@ const __dirname = path.dirname(__filename);
 
 // Database initialization with error handling
 let db: any;
+const dbFilePath = process.env.DATABASE_PATH || process.env.SQLITE_PATH || "presentations.db";
+
 try {
-  db = new Database("presentations.db");
+  const dbDir = path.dirname(dbFilePath);
+  if (dbDir && dbDir !== "." && !existsSync(dbDir)) {
+    mkdirSync(dbDir, { recursive: true });
+  }
+
+  db = new Database(dbFilePath);
   db.exec("PRAGMA foreign_keys = ON;");
-  console.log("Database initialized successfully");
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA synchronous = NORMAL;");
+  db.exec("PRAGMA busy_timeout = 5000;");
+  console.log(`Database initialized successfully at: ${dbFilePath}`);
 } catch (err) {
   console.error("Failed to initialize database:", err);
   process.exit(1);
@@ -156,6 +167,7 @@ const rooms = new Map<string, {
   presentationId: string;
   currentSlideIndex: number;
   privacyMode: boolean;
+  slides: any[];
   students: Map<string, { 
     ws: WebSocket; 
     name: string; 
@@ -167,6 +179,22 @@ const rooms = new Map<string, {
 
 // Map presentationId to active PIN to allow reconnection
 const presentationToPin = new Map<string, string>();
+
+const loadSlidesForPresentation = (presentationId: string) => {
+  return db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(presentationId);
+};
+
+const refreshRoomSlides = (presentationId: string) => {
+  const slides = loadSlidesForPresentation(presentationId);
+  for (const room of rooms.values()) {
+    if (room.presentationId === presentationId) {
+      room.slides = slides;
+      if (room.currentSlideIndex >= slides.length) {
+        room.currentSlideIndex = slides.length - 1;
+      }
+    }
+  }
+};
 
 // API Routes
 app.post("/api/auth/register", async (req, res) => {
@@ -429,6 +457,7 @@ app.put("/api/presentations/:id", authenticateToken, (req, res) => {
     });
 
     transaction();
+    refreshRoomSlides(req.params.id);
     res.json({ success: true });
   } catch (error: any) {
     console.error("Failed to update presentation:", error);
@@ -447,7 +476,7 @@ app.get("/api/reports", authenticateToken, async (req, res) => {
   const teacherId = (req as any).userId;
   await ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM reports WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
-  res.json(rows.map((r: any) => ({ ...r, data: JSON.parse(r.data) })));
+  res.json(rows.map((r: any) => ({ ...r, createdAt: r.created_at, data: JSON.parse(r.data) })));
 });
 
 app.get("/api/reports/:id", authenticateToken, async (req, res) => {
@@ -455,7 +484,7 @@ app.get("/api/reports/:id", authenticateToken, async (req, res) => {
   await ensureTeacher(teacherId);
   const row = db.prepare("SELECT * FROM reports WHERE id = ? AND teacher_id = ?").get(req.params.id, teacherId);
   if (!row) return res.status(404).json({ error: "Report not found" });
-  res.json({ ...row, data: JSON.parse((row as any).data) });
+  res.json({ ...row, createdAt: (row as any).created_at, data: JSON.parse((row as any).data) });
 });
 
 app.post("/api/reports", authenticateToken, async (req, res) => {
@@ -517,6 +546,20 @@ app.get("/api/config", (req, res) => {
   });
 });
 
+app.get("/env.js", (req, res) => {
+  const runtimeConfig = {
+    VITE_FIREBASE_API_KEY: process.env.VITE_FIREBASE_API_KEY || "",
+    VITE_FIREBASE_AUTH_DOMAIN: process.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+    VITE_FIREBASE_PROJECT_ID: process.env.VITE_FIREBASE_PROJECT_ID || "",
+    VITE_FIREBASE_STORAGE_BUCKET: process.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+    VITE_FIREBASE_MESSAGING_SENDER_ID: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    VITE_FIREBASE_APP_ID: process.env.VITE_FIREBASE_APP_ID || ""
+  };
+
+  res.type("application/javascript");
+  res.send(`window.__RUNTIME_CONFIG__ = ${JSON.stringify(runtimeConfig)};`);
+});
+
 // Health check endpoint for Railway - MUST be before static file serving
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
@@ -556,6 +599,7 @@ wss.on("connection", (ws) => {
               presentationId: message.presentationId,
               currentSlideIndex: -1,
               privacyMode: false,
+              slides: loadSlidesForPresentation(message.presentationId),
               students: new Map()
             });
           }
@@ -565,8 +609,8 @@ wss.on("connection", (ws) => {
           if (!room) break;
           
           // 3. Always send the current state back to the host
-          const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
-          const currentSlide = slides[room.currentSlideIndex];
+          room.slides = loadSlidesForPresentation(room.presentationId);
+          const currentSlide = room.slides[room.currentSlideIndex];
           
           ws.send(JSON.stringify({ 
             type: "ROOM_CREATED", 
@@ -615,12 +659,12 @@ wss.on("connection", (ws) => {
             }
 
             // Send current slide state to student
-            const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+            const currentSlide = room.currentSlideIndex >= 0 ? room.slides[room.currentSlideIndex] : null;
             ws.send(JSON.stringify({ 
               type: "SLIDE_UPDATE", 
               index: room.currentSlideIndex,
-              slide: (room.currentSlideIndex >= 0 && slides[room.currentSlideIndex]) 
-                ? { ...slides[room.currentSlideIndex], content: JSON.parse(slides[room.currentSlideIndex].content) } 
+              slide: currentSlide
+                ? { ...currentSlide, content: JSON.parse(currentSlide.content) }
                 : null
             }));
           } else {
@@ -659,7 +703,7 @@ wss.on("connection", (ws) => {
               room.currentSlideIndex++;
             }
             
-            const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+            const slides = room.slides;
             
             if (slides.length === 0) {
               ws.send(JSON.stringify({ type: "ERROR", message: "Презентацията няма слайдове. Моля добавете слайдове и ги запазете." }));
@@ -743,8 +787,7 @@ wss.on("connection", (ws) => {
               student.responses[room.currentSlideIndex] = message.response;
               
               // Score calculation
-              const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
-              const currentSlide = slides[room.currentSlideIndex];
+              const currentSlide = room.slides[room.currentSlideIndex];
               if (currentSlide) {
                 const content = JSON.parse(currentSlide.content);
                 const slidePoints = currentSlide.points || 100;
@@ -777,7 +820,7 @@ wss.on("connection", (ws) => {
                     const sPos = studentPositions[l.id];
                     if (sPos) {
                       const dist = Math.sqrt(Math.pow(sPos.x - l.x, 2) + Math.pow(sPos.y - l.y, 2));
-                      if (dist < 10) { // 10% tolerance
+                      if (dist < 14) { // 14% tolerance for easier label placement
                         correctCount++;
                       }
                     }
@@ -796,6 +839,18 @@ wss.on("connection", (ws) => {
                   });
                   if (pairs.length > 0 && correctCount === pairs.length) {
                     isCorrect = true;
+                  }
+                } else if (currentSlide.type === 'ordering') {
+                  const items = content.orderingItems || [];
+                  const responseOrder = Array.isArray(message.response) ? message.response : [];
+                  if (items.length > 0 && responseOrder.length === items.length) {
+                    isCorrect = items.every((item: any, idx: number) => responseOrder[idx] === item.id);
+                  }
+                } else if (currentSlide.type === 'categorization') {
+                  const items = content.categoryItems || [];
+                  const responseMap = message.response || {};
+                  if (items.length > 0) {
+                    isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
                   }
                 }
 
@@ -895,8 +950,16 @@ const startServer = async () => {
   console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
   console.log(`__dirname: ${__dirname}`);
   
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Loading Vite dev server...");
+  const distPath = path.join(__dirname, "dist");
+  const hasBuiltClient = existsSync(path.join(distPath, "index.html"));
+
+  if (process.env.NODE_ENV !== "production" || !hasBuiltClient) {
+    if (process.env.NODE_ENV === "production" && !hasBuiltClient) {
+      console.warn(`dist/index.html not found at ${distPath}. Falling back to Vite middleware.`);
+    } else {
+      console.log("Loading Vite dev server...");
+    }
+
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -905,7 +968,6 @@ const startServer = async () => {
     console.log("Vite middleware loaded");
   } else {
     // Serve built static files in production
-    const distPath = path.join(__dirname, "dist");
     console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
@@ -917,12 +979,37 @@ const startServer = async () => {
     });
   }
 
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
   });
 };
+
+
+const shutdown = (signal: string) => {
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  wss.clients.forEach(client => {
+    try { client.close(); } catch {}
+  });
+
+  server.close(() => {
+    try {
+      db.close();
+      console.log('Database connection closed');
+    } catch (err) {
+      console.error('Error while closing database:', err);
+    }
+    process.exit(0);
+  });
+
+  // Force exit if graceful shutdown takes too long
+  setTimeout(() => process.exit(0), 5000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 startServer().catch(err => {
   console.error("Failed to start server:", err);
