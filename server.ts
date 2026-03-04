@@ -476,7 +476,7 @@ app.get("/api/reports", authenticateToken, async (req, res) => {
   const teacherId = (req as any).userId;
   await ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM reports WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
-  res.json(rows.map((r: any) => ({ ...r, data: JSON.parse(r.data) })));
+  res.json(rows.map((r: any) => ({ ...r, createdAt: r.created_at, data: JSON.parse(r.data) })));
 });
 
 app.get("/api/reports/:id", authenticateToken, async (req, res) => {
@@ -484,7 +484,7 @@ app.get("/api/reports/:id", authenticateToken, async (req, res) => {
   await ensureTeacher(teacherId);
   const row = db.prepare("SELECT * FROM reports WHERE id = ? AND teacher_id = ?").get(req.params.id, teacherId);
   if (!row) return res.status(404).json({ error: "Report not found" });
-  res.json({ ...row, data: JSON.parse((row as any).data) });
+  res.json({ ...row, createdAt: (row as any).created_at, data: JSON.parse((row as any).data) });
 });
 
 app.post("/api/reports", authenticateToken, async (req, res) => {
