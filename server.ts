@@ -820,7 +820,7 @@ wss.on("connection", (ws) => {
                     const sPos = studentPositions[l.id];
                     if (sPos) {
                       const dist = Math.sqrt(Math.pow(sPos.x - l.x, 2) + Math.pow(sPos.y - l.y, 2));
-                      if (dist < 10) { // 10% tolerance
+                      if (dist < 14) { // 14% tolerance for easier label placement
                         correctCount++;
                       }
                     }

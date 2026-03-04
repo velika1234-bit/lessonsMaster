@@ -1171,7 +1171,7 @@ const Editor = ({ user }: { user: User }) => {
         { type: 'boolean', label: 'Вярно/Грешно', icon: ListChecks, color: 'bg-emerald-400' },
         { type: 'matching', label: 'Свързване', icon: LinkIcon, color: 'bg-amber-400' },
         { type: 'hotspot', label: 'Посочване (Област)', icon: MapPin, color: 'bg-violet-400' },
-        { type: 'labeling', label: 'Подреждане', icon: Move, color: 'bg-teal-400' },
+        { type: 'labeling', label: 'Етикети', icon: Move, color: 'bg-teal-400' },
         { type: 'open-question', label: 'Отворен', icon: MessageSquare, color: 'bg-fuchsia-400' },
       ]
     },
@@ -2152,6 +2152,7 @@ const Editor = ({ user }: { user: User }) => {
                     <div className="space-y-3">
                       <label className="block text-xs font-bold text-gray-500 uppercase">Етикети и Зони за поставяне</label>
                       <p className="text-xs text-gray-400 mb-2">Поставете етикетите върху изображението. Тези позиции ще станат "зони за поставяне" за учениците.</p>
+                      <p className="text-[11px] text-indigo-500 mb-2">Напасване към мрежа: 2% (по-лесно позициониране)</p>
                       <div className="relative aspect-video bg-gray-100 rounded-xl overflow-hidden border border-gray-200 mb-4">
                         {activeSlide.content.imageUrl && (
                           <img src={activeSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50" alt="BG" />
@@ -2166,8 +2167,11 @@ const Editor = ({ user }: { user: User }) => {
                                 const container = document.getElementById('label-editor-container');
                                 if (container) {
                                   const rect = container.getBoundingClientRect();
-                                  const x = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
-                                  const y = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                                  const rawX = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
+                                  const rawY = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                                  const snap = (value: number, step = 2) => Math.round(value / step) * step;
+                                  const x = snap(rawX);
+                                  const y = snap(rawY);
                                   const newLabels = [...(activeSlide.content.labels || [])];
                                   newLabels[idx] = { ...newLabels[idx], x, y };
                                   updateContent({ labels: newLabels });
@@ -2423,6 +2427,7 @@ const HostView = ({ user }: { user: User }) => {
             const token = localStorage.getItem('token');
             void (async () => {
               try {
+                setIsSavingReport(true);
                 const saveResponse = await fetch('/api/reports', {
                   method: 'POST',
                   headers: {
@@ -3696,7 +3701,7 @@ const StudentView = () => {
           </div>
         ) : currentSlide.type === 'labeling' ? (
           <div className="flex-1 flex flex-col gap-6">
-            <p className="text-center text-gray-500 font-medium">Поставете етикетите в правилните зони</p>
+            <p className="text-center text-gray-500 font-medium">Поставете етикетите в правилните зони (има магнитно напасване при близост)</p>
             
             {/* Label Tray */}
             {!submitted && (
@@ -3706,8 +3711,12 @@ const StudentView = () => {
                     key={`tray-${label.id}`}
                     className="bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100 font-bold text-indigo-600 cursor-pointer hover:bg-indigo-100 transition-colors"
                     onClick={() => {
-                      // Initial placement in center if clicked
-                      setLabelPositions(prev => ({ ...prev, [label.id]: { x: 50, y: 50 } }));
+                      const zones = currentSlide.content.labels || [];
+                      const occupied = new Set(Object.keys(labelPositions));
+                      const firstFreeZone = zones.find((z: any) => !occupied.has(z.id));
+                      const x = firstFreeZone?.x ?? 50;
+                      const y = firstFreeZone?.y ?? 50;
+                      setLabelPositions(prev => ({ ...prev, [label.id]: { x, y } }));
                     }}
                   >
                     {label.text}
@@ -3760,8 +3769,19 @@ const StudentView = () => {
                         const container = document.getElementById('student-label-container');
                         if (container) {
                           const rect = container.getBoundingClientRect();
-                          const x = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
-                          const y = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                          const rawX = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
+                          const rawY = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                          const snap = (value: number, step = 2) => Math.round(value / step) * step;
+                          const zones = currentSlide.content.labels || [];
+                          const nearestZone = zones.reduce((best: any, zone: any) => {
+                            const dist = Math.hypot(rawX - zone.x, rawY - zone.y);
+                            if (!best || dist < best.dist) return { zone, dist };
+                            return best;
+                          }, null);
+
+                          const shouldMagnet = nearestZone && nearestZone.dist <= 14;
+                          const x = shouldMagnet ? nearestZone.zone.x : snap(rawX);
+                          const y = shouldMagnet ? nearestZone.zone.y : snap(rawY);
                           setLabelPositions(prev => ({ ...prev, [label.id]: { x, y } }));
                         }
                       }}
