@@ -891,6 +891,11 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
+    if (!auth) {
+      onLogout();
+      return;
+    }
+
     await signOut(auth);
     onLogout();
   };
@@ -2309,11 +2314,27 @@ const HostView = ({ user }: { user: User }) => {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [hostPrivacyMode, setHostPrivacyMode] = useState(false);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
+  const latestPresentationRef = useRef<Presentation | null>(null);
+  const latestTeacherIdRef = useRef(user.id);
+  const latestPrivacyModeRef = useRef(false);
+
+  useEffect(() => {
+    latestPresentationRef.current = presentationData;
+  }, [presentationData]);
+
+  useEffect(() => {
+    latestTeacherIdRef.current = user.id;
+  }, [user.id]);
+
+  useEffect(() => {
+    latestPrivacyModeRef.current = hostPrivacyMode;
+  }, [hostPrivacyMode]);
   useEffect(() => {
     if (id) {
       // Fetch from API instead of Firestore
@@ -2395,23 +2416,40 @@ const HostView = ({ user }: { user: User }) => {
           setCurrentSlide(null);
           setIsFinished(true);
           // Auto-save report to database when finished via API
-          if (presentationData) {
-            fetch('/api/reports', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'teacher-id': user.id
-              },
-              body: JSON.stringify({
-                presentationId: presentationData.id,
-                presentationTitle: presentationData.title,
-                data: {
-                  students: msg.leaderboard,
-                  slides: presentationData.slides,
-                  date: new Date().toLocaleDateString("bg-BG")
+          const presentation = latestPresentationRef.current;
+          if (presentation) {
+            const token = localStorage.getItem('token');
+            void (async () => {
+              try {
+                const saveResponse = await fetch('/api/reports', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'teacher-id': latestTeacherIdRef.current,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {})
+                  },
+                  body: JSON.stringify({
+                    presentationId: presentation.id,
+                    presentationTitle: presentation.title,
+                    privacyMode: latestPrivacyModeRef.current,
+                    data: {
+                      students: msg.leaderboard,
+                      slides: presentation.slides,
+                      date: new Date().toLocaleDateString("bg-BG")
+                    }
+                  })
+                });
+
+                if (!saveResponse.ok) {
+                  const errorBody = await saveResponse.text();
+                  throw new Error(`Auto-save report failed (${saveResponse.status}): ${errorBody}`);
                 }
-              })
-            }).catch(err => console.error("Auto-save report failed", err));
+
+                console.log('Report auto-saved successfully');
+              } catch (err) {
+                console.error("Auto-save report failed", err);
+              }
+            })();
           }
           break;
       }
@@ -2430,19 +2468,28 @@ const HostView = ({ user }: { user: User }) => {
       const res = await fetch(`/api/sessions/${pin}/report`);
       const data = await res.json();
       
-      await fetch('/api/reports', {
+      const saveResponse = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'teacher-id': user.id
+        },
         body: JSON.stringify({
           presentationId: id,
           presentationTitle: data.presentationTitle,
           data: data
         })
       });
-      
+
+      if (!saveResponse.ok) {
+        const errorBody = await saveResponse.text();
+        throw new Error(`Report save failed (${saveResponse.status}): ${errorBody}`);
+      }
+
       navigate('/reports');
     } catch (err) {
       console.error("Failed to save report", err);
+      alert('Не успяхме да запазим доклада. Моля, опитайте отново.');
       navigate('/');
     }
   };
@@ -2591,15 +2638,13 @@ const HostView = ({ user }: { user: User }) => {
     </div>
   );
 
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
-
   const startPresentation = () => {
     if (!pin) return;
     ws.current?.send(JSON.stringify({ 
       type: 'START_PRESENTATION', 
       pin, 
       presentationId: id,
-      privacyMode: isPrivacyMode 
+      privacyMode: hostPrivacyMode 
     }));
   };
 
@@ -2734,8 +2779,8 @@ const HostView = ({ user }: { user: User }) => {
           <input 
             type="checkbox" 
             id="privacy-mode" 
-            checked={isPrivacyMode}
-            onChange={(e) => setIsPrivacyMode(e.target.checked)}
+            checked={hostPrivacyMode}
+            onChange={(e) => setHostPrivacyMode(e.target.checked)}
             className="w-5 h-5 rounded border-white/20 bg-white/10 text-indigo-500 focus:ring-indigo-500"
           />
           <label htmlFor="privacy-mode" className="text-sm font-bold flex items-center gap-2 cursor-pointer select-none">
