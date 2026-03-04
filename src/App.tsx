@@ -2333,8 +2333,8 @@ const HostView = ({ user }: { user: User }) => {
   }, [user.id]);
 
   useEffect(() => {
-    latestPrivacyModeRef.current = hostPrivacyMode;
-  }, [hostPrivacyMode]);
+    latestPrivacyModeRef.current = isPrivacyMode;
+  }, [isPrivacyMode]);
   useEffect(() => {
     if (id) {
       // Fetch from API instead of Firestore
@@ -2628,6 +2628,8 @@ const HostView = ({ user }: { user: User }) => {
       };
     });
   }, [currentSlide, responses]);
+
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
 
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
