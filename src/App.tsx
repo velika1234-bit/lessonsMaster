@@ -2314,7 +2314,7 @@ const HostView = ({ user }: { user: User }) => {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
+  const [hostPrivacyMode, setHostPrivacyMode] = useState(false);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
@@ -2646,7 +2646,7 @@ const HostView = ({ user }: { user: User }) => {
       type: 'START_PRESENTATION', 
       pin, 
       presentationId: id,
-      privacyMode: isPrivacyMode 
+      privacyMode: hostPrivacyMode 
     }));
   };
 
@@ -2781,8 +2781,8 @@ const HostView = ({ user }: { user: User }) => {
           <input 
             type="checkbox" 
             id="privacy-mode" 
-            checked={isPrivacyMode}
-            onChange={(e) => setIsPrivacyMode(e.target.checked)}
+            checked={hostPrivacyMode}
+            onChange={(e) => setHostPrivacyMode(e.target.checked)}
             className="w-5 h-5 rounded border-white/20 bg-white/10 text-indigo-500 focus:ring-indigo-500"
           />
           <label htmlFor="privacy-mode" className="text-sm font-bold flex items-center gap-2 cursor-pointer select-none">
