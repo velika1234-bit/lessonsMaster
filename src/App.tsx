@@ -1335,7 +1335,7 @@ const Editor = ({ user }: { user: User }) => {
     if (!presentation) return;
     const newSlide: Slide = {
       type,
-      points: ['quiz-single', 'quiz-multi', 'boolean', 'labeling', 'hotspot', 'open-question'].includes(type) ? 1 : undefined,
+      points: ['quiz-single', 'quiz-multi', 'boolean', 'labeling', 'hotspot', 'open-question', 'ordering', 'categorization'].includes(type) ? 1 : undefined,
       content: {
         title: type === 'title' ? 'Заглавие' : 'Нов Слайд',
         body: type === 'text-image' ? 'Въведете текст тук...' : '',

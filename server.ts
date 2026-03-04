@@ -790,7 +790,7 @@ wss.on("connection", (ws) => {
               const currentSlide = room.slides[room.currentSlideIndex];
               if (currentSlide) {
                 const content = JSON.parse(currentSlide.content);
-                const slidePoints = currentSlide.points || 100;
+                const slidePoints = currentSlide.points ?? 1;
                 let isCorrect = false;
 
                 if (currentSlide.type === 'quiz-single' || currentSlide.type === 'boolean') {
