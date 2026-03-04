@@ -2315,6 +2315,8 @@ const HostView = ({ user }: { user: User }) => {
   const [isFinished, setIsFinished] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [hostPrivacyMode, setHostPrivacyMode] = useState(false);
+  const [isSavingReport, setIsSavingReport] = useState(false);
+  const [isReportSaved, setIsReportSaved] = useState(false);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
@@ -2333,8 +2335,8 @@ const HostView = ({ user }: { user: User }) => {
   }, [user.id]);
 
   useEffect(() => {
-    latestPrivacyModeRef.current = isPrivacyMode;
-  }, [isPrivacyMode]);
+    latestPrivacyModeRef.current = hostPrivacyMode;
+  }, [hostPrivacyMode]);
   useEffect(() => {
     if (id) {
       // Fetch from API instead of Firestore
@@ -2445,9 +2447,12 @@ const HostView = ({ user }: { user: User }) => {
                   throw new Error(`Auto-save report failed (${saveResponse.status}): ${errorBody}`);
                 }
 
+                setIsReportSaved(true);
                 console.log('Report auto-saved successfully');
               } catch (err) {
                 console.error("Auto-save report failed", err);
+              } finally {
+                setIsSavingReport(false);
               }
             })();
           }
@@ -2464,7 +2469,15 @@ const HostView = ({ user }: { user: User }) => {
 
   const finishSession = async () => {
     if (!pin) return;
+    if (isSavingReport) return;
+    if (isReportSaved) {
+      navigate('/reports');
+      return;
+    }
+
     try {
+      setIsSavingReport(true);
+      const token = localStorage.getItem('token');
       const res = await fetch(`/api/sessions/${pin}/report`);
       const data = await res.json();
       
@@ -2472,11 +2485,13 @@ const HostView = ({ user }: { user: User }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'teacher-id': user.id
+          'teacher-id': user.id,
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
         },
         body: JSON.stringify({
           presentationId: id,
           presentationTitle: data.presentationTitle,
+          privacyMode: hostPrivacyMode,
           data: data
         })
       });
@@ -2486,11 +2501,13 @@ const HostView = ({ user }: { user: User }) => {
         throw new Error(`Report save failed (${saveResponse.status}): ${errorBody}`);
       }
 
+      setIsReportSaved(true);
       navigate('/reports');
     } catch (err) {
       console.error("Failed to save report", err);
-      alert('Не успяхме да запазим доклада. Моля, опитайте отново.');
-      navigate('/');
+      alert('Не успяхме да запазим доклада в Архива. Опитайте отново.');
+    } finally {
+      setIsSavingReport(false);
     }
   };
 
@@ -2694,9 +2711,13 @@ const HostView = ({ user }: { user: User }) => {
                 <Button className="h-16 text-xl" onClick={downloadReport}>
                   <Download className="w-6 h-6" /> Изтегли PDF Отчет
                 </Button>
-                <Button variant="secondary" className="h-16 text-xl" onClick={() => navigate('/')}>
+                <Button variant="secondary" className="h-16 text-xl" onClick={finishSession} disabled={isSavingReport}>
+                  {isSavingReport ? 'Запазване...' : 'Запази в Доклади'}
+                </Button>
+                <Button variant="ghost" className="h-16 text-xl" onClick={() => navigate('/')}>
                   Към Таблото
                 </Button>
+                <p className="text-xs text-gray-400">За да се появи в Архив на сесиите, натиснете „Запази в Доклади“.</p>
               </div>
             </div>
           </motion.div>
