@@ -167,6 +167,7 @@ const rooms = new Map<string, {
   presentationId: string;
   currentSlideIndex: number;
   privacyMode: boolean;
+  slides: any[];
   students: Map<string, { 
     ws: WebSocket; 
     name: string; 
@@ -178,6 +179,22 @@ const rooms = new Map<string, {
 
 // Map presentationId to active PIN to allow reconnection
 const presentationToPin = new Map<string, string>();
+
+const loadSlidesForPresentation = (presentationId: string) => {
+  return db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(presentationId);
+};
+
+const refreshRoomSlides = (presentationId: string) => {
+  const slides = loadSlidesForPresentation(presentationId);
+  for (const room of rooms.values()) {
+    if (room.presentationId === presentationId) {
+      room.slides = slides;
+      if (room.currentSlideIndex >= slides.length) {
+        room.currentSlideIndex = slides.length - 1;
+      }
+    }
+  }
+};
 
 // API Routes
 app.post("/api/auth/register", async (req, res) => {
@@ -440,6 +457,7 @@ app.put("/api/presentations/:id", authenticateToken, (req, res) => {
     });
 
     transaction();
+    refreshRoomSlides(req.params.id);
     res.json({ success: true });
   } catch (error: any) {
     console.error("Failed to update presentation:", error);
@@ -581,6 +599,7 @@ wss.on("connection", (ws) => {
               presentationId: message.presentationId,
               currentSlideIndex: -1,
               privacyMode: false,
+              slides: loadSlidesForPresentation(message.presentationId),
               students: new Map()
             });
           }
@@ -590,8 +609,8 @@ wss.on("connection", (ws) => {
           if (!room) break;
           
           // 3. Always send the current state back to the host
-          const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
-          const currentSlide = slides[room.currentSlideIndex];
+          room.slides = loadSlidesForPresentation(room.presentationId);
+          const currentSlide = room.slides[room.currentSlideIndex];
           
           ws.send(JSON.stringify({ 
             type: "ROOM_CREATED", 
@@ -640,12 +659,12 @@ wss.on("connection", (ws) => {
             }
 
             // Send current slide state to student
-            const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+            const currentSlide = room.currentSlideIndex >= 0 ? room.slides[room.currentSlideIndex] : null;
             ws.send(JSON.stringify({ 
               type: "SLIDE_UPDATE", 
               index: room.currentSlideIndex,
-              slide: (room.currentSlideIndex >= 0 && slides[room.currentSlideIndex]) 
-                ? { ...slides[room.currentSlideIndex], content: JSON.parse(slides[room.currentSlideIndex].content) } 
+              slide: currentSlide
+                ? { ...currentSlide, content: JSON.parse(currentSlide.content) }
                 : null
             }));
           } else {
@@ -684,7 +703,7 @@ wss.on("connection", (ws) => {
               room.currentSlideIndex++;
             }
             
-            const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+            const slides = room.slides;
             
             if (slides.length === 0) {
               ws.send(JSON.stringify({ type: "ERROR", message: "Презентацията няма слайдове. Моля добавете слайдове и ги запазете." }));
@@ -768,8 +787,7 @@ wss.on("connection", (ws) => {
               student.responses[room.currentSlideIndex] = message.response;
               
               // Score calculation
-              const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
-              const currentSlide = slides[room.currentSlideIndex];
+              const currentSlide = room.slides[room.currentSlideIndex];
               if (currentSlide) {
                 const content = JSON.parse(currentSlide.content);
                 const slidePoints = currentSlide.points || 100;
