@@ -840,6 +840,18 @@ wss.on("connection", (ws) => {
                   if (pairs.length > 0 && correctCount === pairs.length) {
                     isCorrect = true;
                   }
+                } else if (currentSlide.type === 'ordering') {
+                  const items = content.orderingItems || [];
+                  const responseOrder = Array.isArray(message.response) ? message.response : [];
+                  if (items.length > 0 && responseOrder.length === items.length) {
+                    isCorrect = items.every((item: any, idx: number) => responseOrder[idx] === item.id);
+                  }
+                } else if (currentSlide.type === 'categorization') {
+                  const items = content.categoryItems || [];
+                  const responseMap = message.response || {};
+                  if (items.length > 0) {
+                    isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
+                  }
                 }
 
                 if (isCorrect) {

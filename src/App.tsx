@@ -117,7 +117,9 @@ type SlideType =
   | 'hotspot'
   | 'open-question'
   | 'whiteboard'
-  | 'matching';
+  | 'matching'
+  | 'ordering'
+  | 'categorization';
 
 interface SlideOption {
   text: string;
@@ -151,6 +153,9 @@ interface Slide {
     labels?: Label[];
     hotspot?: Hotspot;
     pairs?: { left: string, right: string, id: string }[];
+    orderingItems?: { id: string; text: string }[];
+    categories?: string[];
+    categoryItems?: { id: string; text: string; category: string }[];
     backgroundImage?: string;
     placeholder?: string;
     // New styling properties
@@ -585,7 +590,7 @@ const ReportDetail = ({ user }: { user: User }) => {
     currentY += 10;
 
     report.data.slides.forEach((slide: any, idx: number) => {
-      if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching'].includes(slide.type)) {
+      if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) {
         if (currentY > 250) {
           doc.addPage();
           currentY = 20;
@@ -776,7 +781,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
     try {
       const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON обект за нова презентация на български език.
       Формат: { "title": "...", "slides": [{ "type": "...", "content": { "title": "...", "body": "...", "options": [...], "imageUrl": "...", "hotspot": {...}, "labels": [...] } }] }
-      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
       Генерирайте между 5 и 10 слайда. Смесете информация с интерактивни въпроси.`;
 
       const userPrompt = `Създай цялостна презентация въз основа на следното:
@@ -1170,6 +1175,8 @@ const Editor = ({ user }: { user: User }) => {
         { type: 'quiz-single', label: 'Тестови', icon: CheckSquare, color: 'bg-indigo-400' },
         { type: 'boolean', label: 'Вярно/Грешно', icon: ListChecks, color: 'bg-emerald-400' },
         { type: 'matching', label: 'Свързване', icon: LinkIcon, color: 'bg-amber-400' },
+        { type: 'ordering', label: 'Подреждане', icon: Move, color: 'bg-cyan-500' },
+        { type: 'categorization', label: 'Категоризиране', icon: Layout, color: 'bg-lime-500' },
         { type: 'hotspot', label: 'Посочване (Област)', icon: MapPin, color: 'bg-violet-400' },
         { type: 'labeling', label: 'Етикети', icon: Move, color: 'bg-teal-400' },
         { type: 'open-question', label: 'Отворен', icon: MessageSquare, color: 'bg-fuchsia-400' },
@@ -1217,11 +1224,11 @@ const Editor = ({ user }: { user: User }) => {
     try {
       const systemInstruction = mode === 'full' 
         ? `Вие сте експерт по образование. Генерирайте JSON масив от 5 до 8 интерактивни слайда на български език за цялостен урок.
-          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
           Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
           Важно: Създайте логическа последователност от информация и въпроси.`
         : `Вие сте експерт по образование. Генерирайте JSON масив от точно 1 интерактивен слайд на български език.
-          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
           Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
           Важно: Създайте съдържание, което точно отговаря на инструкцията.`;
 
@@ -1341,6 +1348,16 @@ const Editor = ({ user }: { user: User }) => {
         ] : undefined,
         labels: type === 'labeling' ? [] : undefined,
         pairs: type === 'matching' ? [] : undefined,
+        orderingItems: type === 'ordering' ? [
+          { id: nanoid(), text: 'Първи елемент' },
+          { id: nanoid(), text: 'Втори елемент' },
+          { id: nanoid(), text: 'Трети елемент' }
+        ] : undefined,
+        categories: type === 'categorization' ? ['Категория 1', 'Категория 2'] : undefined,
+        categoryItems: type === 'categorization' ? [
+          { id: nanoid(), text: 'Елемент 1', category: 'Категория 1' },
+          { id: nanoid(), text: 'Елемент 2', category: 'Категория 2' }
+        ] : undefined,
         hotspot: type === 'hotspot' ? { x: 50, y: 50, radius: 10 } : undefined,
         imageUrl: (type === 'text-image' || type === 'labeling' || type === 'hotspot' || type === 'whiteboard') ? '' : undefined,
         videoUrl: type === 'video' ? '' : undefined,
@@ -2264,8 +2281,99 @@ const Editor = ({ user }: { user: User }) => {
                   </div>
                 )}
 
+                {activeSlide.type === 'ordering' && (
+                  <div className="flex flex-col gap-4">
+                    <label className="block text-xs font-bold text-gray-500 uppercase">Елементи за подреждане (правилен ред)</label>
+                    <p className="text-xs text-gray-400">Учениците ще трябва да подредят елементите в точно този ред.</p>
+                    <div className="space-y-2">
+                      {(activeSlide.content.orderingItems || []).map((item, idx) => (
+                        <div key={item.id} className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl border border-gray-100">
+                          <span className="text-xs font-black text-gray-400 w-6 text-center">{idx + 1}</span>
+                          <input
+                            className="flex-1 p-2 border border-gray-200 rounded-lg text-sm"
+                            value={item.text}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.orderingItems || [])];
+                              next[idx] = { ...next[idx], text: e.target.value };
+                              updateContent({ orderingItems: next });
+                            }}
+                          />
+                          <Button variant="ghost" onClick={() => {
+                            const next = (activeSlide.content.orderingItems || []).filter((_, i) => i !== idx);
+                            updateContent({ orderingItems: next });
+                          }}><Trash2 className="w-4 h-4" /></Button>
+                        </div>
+                      ))}
+                    </div>
+                    <Button variant="secondary" onClick={() => {
+                      const next = [...(activeSlide.content.orderingItems || []), { id: nanoid(), text: 'Нов елемент' }];
+                      updateContent({ orderingItems: next });
+                    }}>+ Добави елемент</Button>
+                  </div>
+                )}
+
+                {activeSlide.type === 'categorization' && (
+                  <div className="flex flex-col gap-5">
+                    <label className="block text-xs font-bold text-gray-500 uppercase">Категории и елементи</label>
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-400">Категории</p>
+                      {(activeSlide.content.categories || []).map((cat, idx) => (
+                        <div key={`${cat}-${idx}`} className="flex gap-2">
+                          <input className="flex-1 p-2 border border-gray-200 rounded-lg text-sm" value={cat}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.categories || [])];
+                              const oldCat = next[idx];
+                              next[idx] = e.target.value;
+                              const items = (activeSlide.content.categoryItems || []).map(it => it.category === oldCat ? { ...it, category: e.target.value } : it);
+                              updateContent({ categories: next, categoryItems: items });
+                            }}
+                          />
+                          <Button variant="ghost" onClick={() => {
+                            const removeCat = (activeSlide.content.categories || [])[idx];
+                            const cats = (activeSlide.content.categories || []).filter((_, i) => i !== idx);
+                            const items = (activeSlide.content.categoryItems || []).filter(it => it.category !== removeCat);
+                            updateContent({ categories: cats, categoryItems: items });
+                          }}><Trash2 className="w-4 h-4" /></Button>
+                        </div>
+                      ))}
+                      <Button variant="secondary" onClick={() => updateContent({ categories: [...(activeSlide.content.categories || []), `Категория ${(activeSlide.content.categories || []).length + 1}`] })}>+ Добави категория</Button>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-400">Елементи и правилна категория</p>
+                      {(activeSlide.content.categoryItems || []).map((item, idx) => (
+                        <div key={item.id} className="grid grid-cols-12 gap-2">
+                          <input className="col-span-7 p-2 border border-gray-200 rounded-lg text-sm" value={item.text}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.categoryItems || [])];
+                              next[idx] = { ...next[idx], text: e.target.value };
+                              updateContent({ categoryItems: next });
+                            }}
+                          />
+                          <select className="col-span-4 p-2 border border-gray-200 rounded-lg text-sm" value={item.category}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.categoryItems || [])];
+                              next[idx] = { ...next[idx], category: e.target.value };
+                              updateContent({ categoryItems: next });
+                            }}>
+                            {(activeSlide.content.categories || []).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                          </select>
+                          <Button variant="ghost" className="col-span-1" onClick={() => {
+                            const next = (activeSlide.content.categoryItems || []).filter((_, i) => i !== idx);
+                            updateContent({ categoryItems: next });
+                          }}><Trash2 className="w-4 h-4" /></Button>
+                        </div>
+                      ))}
+                      <Button variant="secondary" onClick={() => {
+                        const fallback = (activeSlide.content.categories || [])[0] || 'Категория 1';
+                        const next = [...(activeSlide.content.categoryItems || []), { id: nanoid(), text: 'Нов елемент', category: fallback }];
+                        updateContent({ categoryItems: next });
+                      }}>+ Добави елемент</Button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Timer Settings */}
-                {['quiz-single', 'quiz-multi', 'open-question', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching'].includes(activeSlide.type) && (
+                {['quiz-single', 'quiz-multi', 'open-question', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching', 'ordering', 'categorization'].includes(activeSlide.type) && (
                   <div className="mt-12 pt-8 border-t border-gray-100">
                     <label className="block text-xs font-bold text-gray-400 uppercase mb-4">Настройки на времето</label>
                     <div className="flex items-center gap-4">
@@ -2578,7 +2686,7 @@ const HostView = ({ user }: { user: User }) => {
       currentY += 10;
 
       data.slides.forEach((slide: any, idx: number) => {
-        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling'].includes(slide.type)) {
+        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'ordering', 'categorization'].includes(slide.type)) {
           if (currentY > 250) {
             doc.addPage();
             currentY = 20;
@@ -3113,6 +3221,34 @@ const HostView = ({ user }: { user: User }) => {
               </div>
             )}
 
+            {currentSlide.type === 'ordering' && (
+              <div className="w-full max-w-2xl mx-auto space-y-3">
+                {(currentSlide.content.orderingItems || []).map((item: any, idx: number) => (
+                  <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-4 font-bold text-gray-700 flex items-center gap-3">
+                    <span className="text-indigo-400">{idx + 1}.</span>
+                    <span>{item.text}</span>
+                  </div>
+                ))}
+                <div className="text-center text-gray-400 font-bold uppercase tracking-widest pt-4">Учениците подреждат елементите... ({Object.keys(responses).length} отговора)</div>
+              </div>
+            )}
+
+            {currentSlide.type === 'categorization' && (
+              <div className="w-full grid md:grid-cols-3 gap-4">
+                {(currentSlide.content.categories || []).map((cat: string) => (
+                  <div key={cat} className="bg-white rounded-2xl border border-gray-100 p-4">
+                    <h4 className="font-black text-indigo-600 mb-3">{cat}</h4>
+                    <div className="space-y-2">
+                      {(currentSlide.content.categoryItems || []).filter((it: any) => it.category === cat).map((it: any) => (
+                        <div key={it.id} className="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 font-semibold text-sm">{it.text}</div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div className="md:col-span-3 text-center text-gray-400 font-bold uppercase tracking-widest">Учениците категоризират елементите... ({Object.keys(responses).length} отговора)</div>
+              </div>
+            )}
+
             {currentSlide.type === 'open-question' && (
               <div className="w-full grid grid-cols-2 gap-4 overflow-y-auto max-h-[400px] p-4">
                 <AnimatePresence>
@@ -3319,6 +3455,9 @@ const StudentView = () => {
   const [multiResponses, setMultiResponses] = useState<number[]>([]);
   const [matchingConnections, setMatchingConnections] = useState<Record<string, string>>({});
   const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
+  const [orderingResponse, setOrderingResponse] = useState<{ id: string; text: string }[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
 
   const submitResponse = (response: any) => {
     ws.current?.send(JSON.stringify({ type: 'SUBMIT_RESPONSE', response }));
@@ -3346,6 +3485,18 @@ const StudentView = () => {
         [items[i], items[j]] = [items[j], items[i]];
       }
       setShuffledRightItems(items);
+    }
+    if (currentSlide?.type === 'ordering') {
+      const items = [...(currentSlide.content.orderingItems || [])];
+      for (let i = items.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [items[i], items[j]] = [items[j], items[i]];
+      }
+      setOrderingResponse(items);
+    }
+    if (currentSlide?.type === 'categorization') {
+      setSelectedCategory((currentSlide.content.categories || [])[0] || null);
+      setCategorizationResponse({});
     }
   }, [currentSlide]);
 
@@ -3699,7 +3850,79 @@ const StudentView = () => {
               </Button>
             )}
           </div>
-        ) : currentSlide.type === 'labeling' ? (
+        
+        ) : currentSlide.type === 'ordering' ? (
+          <div className="flex-1 flex flex-col gap-6">
+            <p className="text-center text-gray-500 font-medium">Подредете елементите в правилен ред</p>
+            <div className="space-y-3">
+              {orderingResponse.map((item, idx) => (
+                <div key={item.id} className="bg-white p-4 rounded-xl border border-gray-100 flex items-center gap-3">
+                  <span className="w-6 text-center font-black text-indigo-400">{idx + 1}</span>
+                  <div className="flex-1 font-semibold text-gray-700">{item.text}</div>
+                  {!submitted && (
+                    <div className="flex gap-1">
+                      <button className="px-2 py-1 rounded bg-gray-100" disabled={idx===0} onClick={() => {
+                        const next = [...orderingResponse];
+                        [next[idx-1], next[idx]] = [next[idx], next[idx-1]];
+                        setOrderingResponse(next);
+                      }}>↑</button>
+                      <button className="px-2 py-1 rounded bg-gray-100" disabled={idx===orderingResponse.length-1} onClick={() => {
+                        const next = [...orderingResponse];
+                        [next[idx+1], next[idx]] = [next[idx], next[idx+1]];
+                        setOrderingResponse(next);
+                      }}>↓</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {!submitted && (
+              <Button className="h-16 text-xl" onClick={() => submitResponse(orderingResponse.map(i => i.id))} disabled={orderingResponse.length === 0}>Изпрати подреждането</Button>
+            )}
+          </div>
+        ) : currentSlide.type === 'categorization' ? (
+          <div className="flex-1 flex flex-col gap-6">
+            <p className="text-center text-gray-500 font-medium">Изберете категория и поставете елементите</p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {(currentSlide.content.categories || []).map((cat: string) => (
+                <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-4 py-2 rounded-full border text-sm font-bold ${selectedCategory === cat ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-200 text-gray-600'}`}>{cat}</button>
+              ))}
+            </div>
+            {!submitted && (
+              <div className="bg-white p-4 rounded-2xl border border-gray-100 flex flex-wrap gap-2 justify-center">
+                {(currentSlide.content.categoryItems || []).filter((it: any) => !categorizationResponse[it.id]).map((it: any) => (
+                  <button key={it.id} onClick={() => {
+                    if (!selectedCategory) return;
+                    setCategorizationResponse(prev => ({ ...prev, [it.id]: selectedCategory }));
+                  }} className="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold text-sm">{it.text}</button>
+                ))}
+              </div>
+            )}
+            <div className="grid md:grid-cols-3 gap-3">
+              {(currentSlide.content.categories || []).map((cat: string) => (
+                <div key={cat} className="bg-white rounded-2xl border border-gray-100 p-3">
+                  <h4 className="font-black text-indigo-600 mb-2">{cat}</h4>
+                  <div className="space-y-2 min-h-16">
+                    {Object.entries(categorizationResponse).filter(([,c]) => c === cat).map(([itemId]) => {
+                      const it = (currentSlide.content.categoryItems || []).find((x: any) => x.id === itemId);
+                      if (!it) return null;
+                      return (
+                        <button key={itemId} disabled={submitted} onClick={() => {
+                          const next = { ...categorizationResponse };
+                          delete next[itemId];
+                          setCategorizationResponse(next);
+                        }} className="w-full text-left px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold text-sm">{it.text}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {!submitted && (
+              <Button className="h-16 text-xl" onClick={() => submitResponse(categorizationResponse)} disabled={Object.keys(categorizationResponse).length < (currentSlide.content.categoryItems?.length || 0)}>Изпрати категоризациите</Button>
+            )}
+          </div>
+) : currentSlide.type === 'labeling' ? (
           <div className="flex-1 flex flex-col gap-6">
             <p className="text-center text-gray-500 font-medium">Поставете етикетите в правилните зони (има магнитно напасване при близост)</p>
             
