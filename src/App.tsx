@@ -3854,6 +3854,21 @@ const StudentView = () => {
         ) : currentSlide.type === 'ordering' ? (
           <div className="flex-1 flex flex-col gap-6">
             <p className="text-center text-gray-500 font-medium">Подредете елементите в правилен ред</p>
+            {!submitted && (
+              <div className="flex items-center justify-center gap-3">
+                <Button variant="secondary" className="px-4 py-2" onClick={() => {
+                  const next = [...orderingResponse];
+                  for (let i = next.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [next[i], next[j]] = [next[j], next[i]];
+                  }
+                  setOrderingResponse(next);
+                }}>
+                  Разбъркай
+                </Button>
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">{orderingResponse.length} елемента</div>
+              </div>
+            )}
             <div className="space-y-3">
               {orderingResponse.map((item, idx) => (
                 <div key={item.id} className="bg-white p-4 rounded-xl border border-gray-100 flex items-center gap-3">
@@ -3883,11 +3898,19 @@ const StudentView = () => {
         ) : currentSlide.type === 'categorization' ? (
           <div className="flex-1 flex flex-col gap-6">
             <p className="text-center text-gray-500 font-medium">Изберете категория и поставете елементите</p>
+            <div className="text-center text-xs font-bold text-gray-400 uppercase tracking-widest">
+              {Object.keys(categorizationResponse).length}/{currentSlide.content.categoryItems?.length || 0} разпределени
+            </div>
             <div className="flex flex-wrap gap-2 justify-center">
               {(currentSlide.content.categories || []).map((cat: string) => (
                 <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-4 py-2 rounded-full border text-sm font-bold ${selectedCategory === cat ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-200 text-gray-600'}`}>{cat}</button>
               ))}
             </div>
+            {!submitted && (
+              <div className="flex items-center justify-center">
+                <Button variant="secondary" className="px-4 py-2" onClick={() => setCategorizationResponse({})}>Нулирай</Button>
+              </div>
+            )}
             {!submitted && (
               <div className="bg-white p-4 rounded-2xl border border-gray-100 flex flex-wrap gap-2 justify-center">
                 {(currentSlide.content.categoryItems || []).filter((it: any) => !categorizationResponse[it.id]).map((it: any) => (
