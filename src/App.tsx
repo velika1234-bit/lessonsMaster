@@ -2428,7 +2428,9 @@ const HostView = ({ user }: { user: User }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [hostPrivacyMode, setHostPrivacyMode] = useState(false);
   const [isSavingReport, setIsSavingReport] = useState(false);
+  const [isDownloadingReport, setIsDownloadingReport] = useState(false);
   const [isReportSaved, setIsReportSaved] = useState(false);
+  const [hostOrderingPreview, setHostOrderingPreview] = useState<{ id: string; text: string }[]>([]);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
@@ -2481,6 +2483,20 @@ const HostView = ({ user }: { user: User }) => {
     }
     return () => clearTimeout(timerRef.current);
   }, [timeLeft]);
+
+  useEffect(() => {
+    if (currentSlide?.type === 'ordering') {
+      const next = [...(currentSlide.content.orderingItems || [])];
+      for (let i = next.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+      setHostOrderingPreview(next);
+      return;
+    }
+
+    setHostOrderingPreview([]);
+  }, [currentSlide]);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2625,9 +2641,13 @@ const HostView = ({ user }: { user: User }) => {
   };
 
   const downloadReport = async () => {
-    if (!pin) return;
+    if (!pin || isDownloadingReport) return;
+    setIsDownloadingReport(true);
     try {
       const res = await fetch(`/api/sessions/${pin}/report`);
+      if (!res.ok) {
+        throw new Error(`Report fetch failed (${res.status})`);
+      }
       const data = await res.json();
       
       const doc = new jsPDF();
@@ -2741,6 +2761,9 @@ const HostView = ({ user }: { user: User }) => {
       doc.save(`report-${pin}.pdf`);
     } catch (err) {
       console.error("Failed to download report", err);
+      alert('Не успяхме да изтеглим отчета. Опитайте отново.');
+    } finally {
+      setIsDownloadingReport(false);
     }
   };
 
@@ -2821,16 +2844,16 @@ const HostView = ({ user }: { user: User }) => {
                   <h4 className="text-indigo-600 font-bold mb-2">Общо ученици</h4>
                   <div className="text-5xl font-black">{students.length}</div>
                 </div>
-                <Button className="h-16 text-xl" onClick={downloadReport}>
-                  <Download className="w-6 h-6" /> Изтегли PDF Отчет
+                <Button className="h-16 text-xl" onClick={downloadReport} disabled={isDownloadingReport}>
+                  <Download className="w-6 h-6" /> {isDownloadingReport ? 'Генериране...' : 'Изтегли PDF Отчет'}
                 </Button>
                 <Button variant="secondary" className="h-16 text-xl" onClick={finishSession} disabled={isSavingReport}>
-                  {isSavingReport ? 'Запазване...' : 'Запази в Доклади'}
+                  {isSavingReport ? 'Запазване...' : isReportSaved ? 'Към Доклади' : 'Запази в Доклади'}
                 </Button>
                 <Button variant="ghost" className="h-16 text-xl" onClick={() => navigate('/')}>
                   Към Таблото
                 </Button>
-                <p className="text-xs text-gray-400">За да се появи в Архив на сесиите, натиснете „Запази в Доклади“.</p>
+                <p className="text-xs text-gray-400">{isReportSaved ? 'Докладът е запазен в Архив.' : 'За да се появи в Архив на сесиите, натиснете „Запази в Доклади“.'}</p>
               </div>
             </div>
           </motion.div>
@@ -3223,13 +3246,13 @@ const HostView = ({ user }: { user: User }) => {
 
             {currentSlide.type === 'ordering' && (
               <div className="w-full max-w-2xl mx-auto space-y-3">
-                {(currentSlide.content.orderingItems || []).map((item: any, idx: number) => (
+                {(hostOrderingPreview.length > 0 ? hostOrderingPreview : (currentSlide.content.orderingItems || [])).map((item: any) => (
                   <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-4 font-bold text-gray-700 flex items-center gap-3">
-                    <span className="text-indigo-400">{idx + 1}.</span>
+                    <span className="text-indigo-400">•</span>
                     <span>{item.text}</span>
                   </div>
                 ))}
-                <div className="text-center text-gray-400 font-bold uppercase tracking-widest pt-4">Учениците подреждат елементите... ({Object.keys(responses).length} отговора)</div>
+                <div className="text-center text-gray-400 font-bold uppercase tracking-widest pt-4">Елементите са разбъркани за преглед (без верен ред). {Object.keys(responses).length} отговора</div>
               </div>
             )}
 
@@ -3456,6 +3479,7 @@ const StudentView = () => {
   const [matchingConnections, setMatchingConnections] = useState<Record<string, string>>({});
   const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
   const [orderingResponse, setOrderingResponse] = useState<{ id: string; text: string }[]>([]);
+  const [draggedOrderingIndex, setDraggedOrderingIndex] = useState<number | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
 
@@ -3493,6 +3517,7 @@ const StudentView = () => {
         [items[i], items[j]] = [items[j], items[i]];
       }
       setOrderingResponse(items);
+      setDraggedOrderingIndex(null);
     }
     if (currentSlide?.type === 'categorization') {
       setSelectedCategory((currentSlide.content.categories || [])[0] || null);
@@ -3863,6 +3888,7 @@ const StudentView = () => {
                     [next[i], next[j]] = [next[j], next[i]];
                   }
                   setOrderingResponse(next);
+                  setDraggedOrderingIndex(null);
                 }}>
                   Разбъркай
                 </Button>
@@ -3871,23 +3897,31 @@ const StudentView = () => {
             )}
             <div className="space-y-3">
               {orderingResponse.map((item, idx) => (
-                <div key={item.id} className="bg-white p-4 rounded-xl border border-gray-100 flex items-center gap-3">
+                <div
+                  key={item.id}
+                  draggable={!submitted}
+                  onDragStart={() => {
+                    if (submitted) return;
+                    setDraggedOrderingIndex(idx);
+                  }}
+                  onDragOver={(e) => {
+                    if (submitted) return;
+                    e.preventDefault();
+                  }}
+                  onDrop={() => {
+                    if (submitted || draggedOrderingIndex === null || draggedOrderingIndex === idx) return;
+                    const next = [...orderingResponse];
+                    const [moved] = next.splice(draggedOrderingIndex, 1);
+                    next.splice(idx, 0, moved);
+                    setOrderingResponse(next);
+                    setDraggedOrderingIndex(idx);
+                  }}
+                  onDragEnd={() => setDraggedOrderingIndex(null)}
+                  className={`bg-white p-4 rounded-xl border flex items-center gap-3 transition ${draggedOrderingIndex === idx ? 'border-indigo-300 shadow-sm' : 'border-gray-100'} ${submitted ? '' : 'cursor-grab active:cursor-grabbing'}`}
+                >
                   <span className="w-6 text-center font-black text-indigo-400">{idx + 1}</span>
                   <div className="flex-1 font-semibold text-gray-700">{item.text}</div>
-                  {!submitted && (
-                    <div className="flex gap-1">
-                      <button className="px-2 py-1 rounded bg-gray-100" disabled={idx===0} onClick={() => {
-                        const next = [...orderingResponse];
-                        [next[idx-1], next[idx]] = [next[idx], next[idx-1]];
-                        setOrderingResponse(next);
-                      }}>↑</button>
-                      <button className="px-2 py-1 rounded bg-gray-100" disabled={idx===orderingResponse.length-1} onClick={() => {
-                        const next = [...orderingResponse];
-                        [next[idx+1], next[idx]] = [next[idx], next[idx+1]];
-                        setOrderingResponse(next);
-                      }}>↓</button>
-                    </div>
-                  )}
+                  {!submitted && <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Провлечи</span>}
                 </div>
               ))}
             </div>
