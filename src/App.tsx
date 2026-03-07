@@ -2318,7 +2318,7 @@ const Editor = ({ user }: { user: User }) => {
                     <div className="space-y-2">
                       <p className="text-xs text-gray-400">Категории</p>
                       {(activeSlide.content.categories || []).map((cat, idx) => (
-                        <div key={`${cat}-${idx}`} className="flex gap-2">
+                        <div key={idx} className="flex gap-2">
                           <input className="flex-1 p-2 border border-gray-200 rounded-lg text-sm" value={cat}
                             onChange={e => {
                               const next = [...(activeSlide.content.categories || [])];
