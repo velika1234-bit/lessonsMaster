@@ -155,6 +155,19 @@ const isResponseCorrectForSlide = (slide: any, response: any) => {
     return dist <= hotspot.radius;
   }
 
+  if (slide.type === 'labeling') {
+    const labels = slide.content.labels || [];
+    if (!labels.length || !response || typeof response !== 'object') return false;
+    let correctCount = 0;
+    labels.forEach((label: any) => {
+      const pos = response[label.id];
+      if (!pos || typeof pos.x !== 'number' || typeof pos.y !== 'number') return;
+      const dist = Math.sqrt(Math.pow(pos.x - label.x, 2) + Math.pow(pos.y - label.y, 2));
+      if (dist < 14) correctCount++;
+    });
+    return correctCount === labels.length;
+  }
+
   if (slide.type === 'matching') {
     const pairs = slide.content.pairs || [];
     if (pairs.length === 0 || !response || typeof response !== 'object') return false;
@@ -169,11 +182,38 @@ const isResponseCorrectForSlide = (slide: any, response: any) => {
 
   if (slide.type === 'categorization') {
     const categoryItems = slide.content.categoryItems || [];
-    if (!response || typeof response !== 'object') return false;
+    if (!categoryItems.length || !response) return false;
+    if (Array.isArray(response)) {
+      return categoryItems.every((item: any) => {
+        const found = response.find((entry: any) => entry?.id === item.id || entry?.text === item.text);
+        return found?.category === item.category;
+      });
+    }
+    if (typeof response !== 'object') return false;
     return categoryItems.every((item: any) => response[item.id] === item.category || response[item.text] === item.category);
   }
 
   return false;
+};
+
+const getResponseForSlide = (student: any, index: number, slide?: any) => {
+  const rawResponses = student?.responses;
+  if (rawResponses == null) return undefined;
+
+  const responses = typeof rawResponses === 'string'
+    ? (() => {
+        try { return JSON.parse(rawResponses); } catch { return rawResponses; }
+      })()
+    : rawResponses;
+
+  if (Array.isArray(responses)) return responses[index];
+  if (typeof responses === 'object') {
+    if (responses[index] !== undefined) return responses[index];
+    if (responses[String(index)] !== undefined) return responses[String(index)];
+    if (slide?.id && responses[slide.id] !== undefined) return responses[slide.id];
+  }
+
+  return undefined;
 };
 
 // --- Auth Components ---
@@ -272,7 +312,7 @@ const ReportDetail = ({ user }: { user: User }) => {
       .map((slide: any, idx: number) => {
         if (!answerableSlideTypes.has(slide.type)) return null;
         const responses = students
-          .map((student: any) => student.responses?.[idx])
+          .map((student: any) => getResponseForSlide(student, idx, slide))
           .filter((response: any) => response !== undefined && response !== null);
 
         const correctCount = responses.filter((response: any) => isResponseCorrectForSlide(slide, response)).length;
@@ -368,7 +408,7 @@ const ReportDetail = ({ user }: { user: User }) => {
     const questionStats = (report.data.slides || [])
       .map((slide: any, idx: number) => {
         if (!['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) return null;
-        const responses = sortedStudents.map((student: any) => student.responses?.[idx]).filter((response: any) => response !== undefined && response !== null);
+        const responses = sortedStudents.map((student: any) => getResponseForSlide(student, idx, slide)).filter((response: any) => response !== undefined && response !== null);
         const correctCount = responses.filter((response: any) => isResponseCorrectForSlide(slide, response)).length;
         const accuracy = responses.length ? (correctCount / responses.length) * 100 : 0;
         const participation = sortedStudents.length ? (responses.length / sortedStudents.length) * 100 : 0;
@@ -2473,48 +2513,21 @@ const HostView = ({ user }: { user: User }) => {
       currentY += 10;
 
       data.slides.forEach((slide: any, idx: number) => {
-        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'ordering', 'categorization'].includes(slide.type)) {
+        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) {
           if (currentY > 250) {
             doc.addPage();
             currentY = 20;
             doc.setFont('Roboto');
           }
 
-          const responses = data.students.map((s: any) => s.responses[idx]).filter((r: any) => r !== undefined);
+          const responses = data.students.map((s: any) => getResponseForSlide(s, idx, slide)).filter((r: any) => r !== undefined && r !== null);
           let correctCount = 0;
 
-          // Simple success calculation
           responses.forEach((resp: any) => {
-            let isCorrect = false;
-            if (slide.type === 'quiz-single' || slide.type === 'boolean') {
-              const correctIdx = slide.content.options.findIndex((o: any) => o.isCorrect);
-              if (resp === correctIdx) isCorrect = true;
-            } else if (slide.type === 'quiz-multi') {
-              const correctIndices = slide.content.options.map((o: any, i: number) => o.isCorrect ? i : -1).filter((i: number) => i !== -1);
-              isCorrect = Array.isArray(resp) && resp.length === correctIndices.length && resp.every((r: any) => correctIndices.includes(r));
-            } else if (slide.type === 'hotspot') {
-              const hotspot = slide.content.hotspot;
-              if (hotspot && resp) {
-                const dist = Math.sqrt(Math.pow(resp.x - hotspot.x, 2) + Math.pow(resp.y - hotspot.y, 2));
-                if (dist <= hotspot.radius) isCorrect = true;
-              }
-            } else if (slide.type === 'labeling') {
-              const labels = slide.content.labels || [];
-              let correctLabels = 0;
-              labels.forEach((l: any) => {
-                const sPos = resp?.[l.id];
-                if (sPos) {
-                  const dist = Math.sqrt(Math.pow(sPos.x - l.x, 2) + Math.pow(sPos.y - l.y, 2));
-                  if (dist < 10) correctLabels++;
-                }
-              });
-              if (labels.length > 0 && correctLabels === labels.length) isCorrect = true;
-            }
-
-            if (isCorrect) correctCount++;
+            if (isResponseCorrectForSlide(slide, resp)) correctCount++;
           });
 
-          const successRate = (correctCount / (totalStudents || 1)) * 100;
+          const successRate = responses.length ? (correctCount / responses.length) * 100 : 0;
 
           doc.setFontSize(12);
           doc.setFont("Roboto", "normal");
