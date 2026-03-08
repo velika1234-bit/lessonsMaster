@@ -363,7 +363,7 @@ const ensureTeacher = async (id: string, name: string = "Учител") => {
   if (!user) {
     console.log("Auto-creating user record for sync:", id);
     const hashedPassword = await bcrypt.hash(nanoid(32), 12);
-    db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
+    db.prepare("INSERT OR IGNORE INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
       id, 
       `${id}@internal.system`, 
       hashedPassword, 

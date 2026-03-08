@@ -9,6 +9,8 @@ import {
   Trash2, 
   ChevronRight, 
   ChevronLeft, 
+  ChevronUp,
+  ChevronDown,
   Users, 
   Layout, 
   Type, 
@@ -221,11 +223,39 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const openBackendGoogleAuth = async () => {
+    try {
+      const res = await fetch('/api/auth/google/url');
+      if (!res.ok) throw new Error('Google URL fetch failed');
+      const data = await res.json();
+      if (!data.url) throw new Error('Missing Google auth URL');
+      const popup = window.open(data.url, 'google-auth', 'width=520,height=700');
+      if (!popup) {
+        setError('Браузърът блокира изскачащия прозорец. Моля, разрешете pop-up и опитайте отново.');
+      }
+    } catch (err: any) {
+      console.error('Backend Google Auth Error:', err);
+      setError('Неуспешно стартиране на Google вход през сървъра.');
+    }
+  };
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const payload = event.data;
+      if (!payload || payload.type !== 'OAUTH_AUTH_SUCCESS') return;
+      if (payload.token) localStorage.setItem('token', payload.token);
+      if (payload.user) onLogin(payload.user);
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [onLogin]);
+
   const handleGoogleSignIn = async () => {
     setError('');
     
     if (!auth) {
-      setError('Firebase не е конфигуриран. Моля, добавете API ключовете.');
+      await openBackendGoogleAuth();
       return;
     }
 
@@ -244,8 +274,9 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
       onLogin(userData);
     } catch (err: any) {
       console.error("Google Auth Error:", err);
-      if (err.code === 'auth/operation-not-allowed') {
-        setError('Google входът не е активиран във Firebase Console (Authentication > Sign-in method)');
+      if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/unauthorized-domain') {
+        await openBackendGoogleAuth();
+        setError('Преминахме към сървърен Google вход. Завършете в изскачащия прозорец.');
       } else if (err.code === 'auth/popup-blocked') {
         setError('Браузърът блокира изскачащия прозорец. Моля, разрешете го.');
       } else {
@@ -927,7 +958,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
             <h4 className="font-bold text-emerald-900">Вашите данни са защитени</h4>
             <p className="text-sm text-emerald-700 leading-relaxed">
               Системата използва <b>ефимерно съхранение</b>. Данните на учениците се пазят само по време на активната сесия. 
-              Отчетите се съхраняват в криптирана база данни и се изтриват автоматично след 7 дни, освен ако не ги изтеглите като PDF.
+              Отчетите се съхраняват в защитен архив и можете да ги изтривате ръчно от секция „Доклади“.
             </p>
           </div>
         </div>
@@ -1788,8 +1819,8 @@ const Editor = ({ user }: { user: User }) => {
                         {[
                           { id: 'left', label: 'Ляво', icon: ChevronLeft },
                           { id: 'right', label: 'Дясно', icon: ChevronRight },
-                          { id: 'top', label: 'Горе', icon: ChevronLeft, rotate: 90 },
-                          { id: 'bottom', label: 'Долу', icon: ChevronLeft, rotate: -90 },
+                          { id: 'top', label: 'Горе', icon: ChevronUp },
+                          { id: 'bottom', label: 'Долу', icon: ChevronDown },
                           { id: 'full', label: 'Текст', icon: Type }
                         ].map(l => (
                           <button 
@@ -1797,7 +1828,7 @@ const Editor = ({ user }: { user: User }) => {
                             onClick={() => updateContent({ layout: l.id })}
                             className={`flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition-all ${activeSlide.content.layout === l.id ? 'border-indigo-600 bg-white shadow-sm' : 'border-transparent hover:bg-white/50'}`}
                           >
-                            <l.icon className={`w-4 h-4 text-indigo-600 ${l.rotate ? `rotate-${l.rotate}` : ''}`} />
+                            <l.icon className="w-4 h-4 text-indigo-600" />
                             <span className="text-[8px] font-bold uppercase">{l.label}</span>
                           </button>
                         ))}
@@ -4065,6 +4096,7 @@ export default function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('teacher_user');
+    localStorage.removeItem('token');
   };
 
   if (!user) {
