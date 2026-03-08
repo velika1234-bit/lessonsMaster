@@ -220,6 +220,70 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const openBackendGoogleAuth = async () => {
+    try {
+      const res = await fetch('/api/auth/google/url');
+      if (!res.ok) throw new Error('Google URL fetch failed');
+      const data = await res.json();
+      if (!data.url) throw new Error('Missing Google auth URL');
+      const popup = window.open(data.url, 'google-auth', 'width=520,height=700');
+      if (!popup) {
+        setError('Браузърът блокира изскачащия прозорец. Моля, разрешете pop-up и опитайте отново.');
+      }
+    } catch (err: any) {
+      console.error('Backend Google Auth Error:', err);
+      setError('Неуспешно стартиране на Google вход през сървъра.');
+    }
+  };
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      const payload = event.data;
+      if (!payload || payload.type !== 'OAUTH_AUTH_SUCCESS') return;
+      if (payload.token) localStorage.setItem('token', payload.token);
+      if (payload.user) onLogin(payload.user);
+    };
+
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [onLogin]);
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    
+    if (!auth) {
+      await openBackendGoogleAuth();
+      return;
+    }
+
+    setLoading(true);
+    const provider = new GoogleAuthProvider();
+    try {
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
+      const userData = {
+        id: user.uid,
+        email: user.email || '',
+        name: user.displayName || 'Учител'
+      };
+      
+      await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
+      onLogin(userData);
+    } catch (err: any) {
+      console.error("Google Auth Error:", err);
+      if (err.code === 'auth/operation-not-allowed' || err.code === 'auth/unauthorized-domain') {
+        await openBackendGoogleAuth();
+        setError('Преминахме към сървърен Google вход. Завършете в изскачащия прозорец.');
+      } else if (err.code === 'auth/popup-blocked') {
+        setError('Браузърът блокира изскачащия прозорец. Моля, разрешете го.');
+      } else {
+        setError(`Грешка при Google вход: ${err.message || err.code}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -2619,6 +2683,8 @@ const HostView = ({ user }: { user: User }) => {
       };
     });
   }, [currentSlide, responses]);
+
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
 
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
