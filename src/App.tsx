@@ -9,6 +9,8 @@ import {
   Trash2, 
   ChevronRight, 
   ChevronLeft, 
+  ChevronUp,
+  ChevronDown,
   Users, 
   Layout, 
   Type, 
@@ -31,14 +33,12 @@ import {
   Palette,
   Zap,
   FileText,
-  History,
   ArrowLeft,
   Save,
   Settings,
   XCircle,
   Trophy,
   Link as LinkIcon,
-  Chrome,
   Shield,
   ShieldCheck
 } from 'lucide-react';
@@ -55,12 +55,14 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { Button } from './components/ui/Button';
+import { Card } from './components/ui/Card';
+import { ReportsList } from './components/dashboard/ReportsList';
+import { PresentationsList } from './components/dashboard/PresentationsList';
 import { auth, db } from './lib/firebase';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signInWithPopup, 
-  GoogleAuthProvider,
   onAuthStateChanged,
   signOut,
   updateProfile
@@ -117,7 +119,9 @@ type SlideType =
   | 'hotspot'
   | 'open-question'
   | 'whiteboard'
-  | 'matching';
+  | 'matching'
+  | 'ordering'
+  | 'categorization';
 
 interface SlideOption {
   text: string;
@@ -151,6 +155,9 @@ interface Slide {
     labels?: Label[];
     hotspot?: Hotspot;
     pairs?: { left: string, right: string, id: string }[];
+    orderingItems?: { id: string; text: string }[];
+    categories?: string[];
+    categoryItems?: { id: string; text: string; category: string }[];
     backgroundImage?: string;
     placeholder?: string;
     // New styling properties
@@ -203,33 +210,6 @@ interface Presentation {
 
 // --- Components ---
 
-const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false, title }: any) => {
-  const base = "px-6 py-3 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-sm";
-  const variants: any = {
-    primary: "bg-indigo-500 text-white hover:bg-indigo-600 shadow-lg shadow-indigo-100",
-    secondary: "bg-white text-indigo-600 border-2 border-indigo-50 hover:bg-indigo-50",
-    danger: "bg-rose-50 text-rose-600 hover:bg-rose-100 border-2 border-rose-100",
-    ghost: "text-gray-400 hover:bg-gray-50 hover:text-gray-600 rounded-xl"
-  };
-  
-  return (
-    <button 
-      onClick={onClick} 
-      disabled={disabled || loading}
-      className={`${base} ${variants[variant]} ${className}`}
-      title={title}
-    >
-      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : children}
-    </button>
-  );
-};
-
-const Card = ({ children, className = "" }: any) => (
-  <div className={`bg-white rounded-3xl border border-gray-50 shadow-xl shadow-gray-100/50 p-8 ${className}`}>
-    {children}
-  </div>
-);
-
 // --- Auth Components ---
 
 const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
@@ -239,41 +219,6 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const handleGoogleSignIn = async () => {
-    setError('');
-    
-    if (!auth) {
-      setError('Firebase не е конфигуриран. Моля, добавете API ключовете.');
-      return;
-    }
-
-    setLoading(true);
-    const provider = new GoogleAuthProvider();
-    try {
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-      const userData = {
-        id: user.uid,
-        email: user.email || '',
-        name: user.displayName || 'Учител'
-      };
-      
-      await setDoc(doc(db, 'users', user.uid), userData, { merge: true });
-      onLogin(userData);
-    } catch (err: any) {
-      console.error("Google Auth Error:", err);
-      if (err.code === 'auth/operation-not-allowed') {
-        setError('Google входът не е активиран във Firebase Console (Authentication > Sign-in method)');
-      } else if (err.code === 'auth/popup-blocked') {
-        setError('Браузърът блокира изскачащия прозорец. Моля, разрешете го.');
-      } else {
-        setError(`Грешка при Google вход: ${err.message || err.code}`);
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -342,22 +287,8 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
           </p>
         </div>
 
-        <div className="space-y-4 mb-8">
-          <Button 
-            variant="secondary" 
-            className="w-full h-14 rounded-2xl border-2 border-slate-100 hover:bg-slate-50"
-            onClick={handleGoogleSignIn}
-            disabled={loading}
-          >
-            <Chrome className="w-5 h-5 text-indigo-500" />
-            Влез с Google
-          </Button>
-          
-          <div className="relative flex items-center py-2">
-            <div className="flex-grow border-t border-slate-100"></div>
-            <span className="flex-shrink mx-4 text-slate-300 text-[10px] font-black uppercase tracking-widest">или</span>
-            <div className="flex-grow border-t border-slate-100"></div>
-          </div>
+        <div className="mb-6">
+          <p className="text-xs text-slate-400 font-bold uppercase tracking-widest text-center">Вход с имейл и парола</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -423,6 +354,8 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
 
 // --- Pages ---
 
+// --- Components ---
+
 const ReportsDashboard = ({ user }: { user: User }) => {
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -478,37 +411,12 @@ const ReportsDashboard = ({ user }: { user: User }) => {
           <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {reports.map(report => (
-            <Card key={report.id} className="hover:border-indigo-200 transition-all group border-white">
-              <div className="flex justify-between items-start mb-6">
-                <div className="p-4 bg-indigo-50 rounded-2xl text-indigo-500">
-                  <History className="w-6 h-6" />
-                </div>
-                <div className="text-[10px] font-black text-indigo-200 uppercase tracking-widest">
-                  {report.createdAt ? new Date(report.createdAt).toLocaleDateString('bg-BG') : '...'}
-                </div>
-              </div>
-              <h3 className="text-xl font-black text-gray-900 mb-2 line-clamp-1">{report.presentationTitle}</h3>
-              <div className="flex items-center gap-4 text-xs font-bold text-gray-400 mb-6">
-                <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {report.data?.students?.length || 0}</span>
-                <span className="flex items-center gap-1 text-emerald-400"><Award className="w-3 h-3" /> {report.data?.students ? Math.max(...report.data.students.map((s: any) => s.score), 0) : 0} макс.</span>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="primary" className="flex-1" onClick={() => navigate(`/reports/${report.id}`)}>
-                  Преглед
-                </Button>
-                <Button variant="danger" className="w-12" onClick={() => deleteReport(report.id)}>
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            </Card>
-          ))}
-          {reports.length === 0 && (
-            <div className="col-span-full text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
-              <p className="text-gray-400">Все още нямате записани доклади.</p>
-            </div>
-          )}
+        <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden">
+          <ReportsList
+            reports={reports}
+            onOpen={(reportId) => navigate(`/reports/${reportId}`)}
+            onDelete={deleteReport}
+          />
         </div>
       )}
     </div>
@@ -585,7 +493,7 @@ const ReportDetail = ({ user }: { user: User }) => {
     currentY += 10;
 
     report.data.slides.forEach((slide: any, idx: number) => {
-      if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching'].includes(slide.type)) {
+      if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) {
         if (currentY > 250) {
           doc.addPage();
           currentY = 20;
@@ -776,7 +684,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
     try {
       const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON обект за нова презентация на български език.
       Формат: { "title": "...", "slides": [{ "type": "...", "content": { "title": "...", "body": "...", "options": [...], "imageUrl": "...", "hotspot": {...}, "labels": [...] } }] }
-      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
       Генерирайте между 5 и 10 слайда. Смесете информация с интерактивни въпроси.`;
 
       const userPrompt = `Създай цялостна презентация въз основа на следното:
@@ -891,6 +799,11 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   };
 
   const handleLogout = async () => {
+    if (!auth) {
+      onLogout();
+      return;
+    }
+
     await signOut(auth);
     onLogout();
   };
@@ -964,7 +877,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
             <h4 className="font-bold text-emerald-900">Вашите данни са защитени</h4>
             <p className="text-sm text-emerald-700 leading-relaxed">
               Системата използва <b>ефимерно съхранение</b>. Данните на учениците се пазят само по време на активната сесия. 
-              Отчетите се съхраняват в криптирана база данни и се изтриват автоматично след 7 дни, освен ако не ги изтеглите като PDF.
+              Отчетите се съхраняват в защитен архив и можете да ги изтривате ръчно от секция „Доклади“.
             </p>
           </div>
         </div>
@@ -1033,62 +946,14 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
           <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {presentations.map(p => (
-            <div key={p.id}>
-              <Card className="group hover:border-indigo-200 transition-colors">
-                <div className="h-32 bg-gray-50 rounded-xl mb-4 flex items-center justify-center text-gray-300 group-hover:bg-indigo-50 transition-colors">
-                  <Layout className="w-12 h-12" />
-                </div>
-                <h3 className="text-lg font-bold text-gray-900 mb-4 line-clamp-1">{p.title || 'Без заглавие'}</h3>
-                <div className="flex flex-wrap gap-2">
-                  <Button 
-                    variant="secondary" 
-                    className="flex-1 text-xs h-10 px-3 min-w-[100px]" 
-                    onClick={() => navigate(`/edit/${p.id}`)}
-                    title="Редактиране"
-                  >
-                    <Edit2 className="w-4 h-4" /> Редактирай
-                  </Button>
-                  <div className="flex gap-1">
-                    <Button 
-                      variant="primary" 
-                      className="w-10 h-10 p-0 flex items-center justify-center" 
-                      onClick={() => navigate(`/host/${p.id}`)}
-                      title="Стартиране на урок"
-                    >
-                      <Play className="w-4 h-4 fill-current" />
-                    </Button>
-                    <Button 
-                      variant="secondary" 
-                      className="w-10 h-10 p-0 flex items-center justify-center" 
-                      onClick={() => exportPresentation(p)}
-                      title="Изтегляне на файл"
-                    >
-                      <Download className="w-4 h-4" />
-                    </Button>
-                    <Button 
-                      variant="danger" 
-                      className="w-10 h-10 p-0 flex items-center justify-center" 
-                      onClick={(e: any) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        deletePresentation(p.id);
-                      }}
-                      title="Изтриване"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            </div>
-          ))}
-          {presentations.length === 0 && (
-            <div className="col-span-full text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
-              <p className="text-gray-400">Нямате създадени презентации още.</p>
-            </div>
-          )}
+        <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden">
+          <PresentationsList
+            presentations={presentations}
+            onEdit={(presentationId) => navigate(`/edit/${presentationId}`)}
+            onHost={(presentationId) => navigate(`/host/${presentationId}`)}
+            onExport={exportPresentation}
+            onDelete={deletePresentation}
+          />
         </div>
       )}
     </div>
@@ -1165,8 +1030,10 @@ const Editor = ({ user }: { user: User }) => {
         { type: 'quiz-single', label: 'Тестови', icon: CheckSquare, color: 'bg-indigo-400' },
         { type: 'boolean', label: 'Вярно/Грешно', icon: ListChecks, color: 'bg-emerald-400' },
         { type: 'matching', label: 'Свързване', icon: LinkIcon, color: 'bg-amber-400' },
+        { type: 'ordering', label: 'Подреждане', icon: Move, color: 'bg-cyan-500' },
+        { type: 'categorization', label: 'Категоризиране', icon: Layout, color: 'bg-lime-500' },
         { type: 'hotspot', label: 'Посочване (Област)', icon: MapPin, color: 'bg-violet-400' },
-        { type: 'labeling', label: 'Подреждане', icon: Move, color: 'bg-teal-400' },
+        { type: 'labeling', label: 'Етикети', icon: Move, color: 'bg-teal-400' },
         { type: 'open-question', label: 'Отворен', icon: MessageSquare, color: 'bg-fuchsia-400' },
       ]
     },
@@ -1212,11 +1079,11 @@ const Editor = ({ user }: { user: User }) => {
     try {
       const systemInstruction = mode === 'full' 
         ? `Вие сте експерт по образование. Генерирайте JSON масив от 5 до 8 интерактивни слайда на български език за цялостен урок.
-          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
           Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
           Важно: Създайте логическа последователност от информация и въпроси.`
         : `Вие сте експерт по образование. Генерирайте JSON масив от точно 1 интерактивен слайд на български език.
-          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
           Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
           Важно: Създайте съдържание, което точно отговаря на инструкцията.`;
 
@@ -1323,7 +1190,7 @@ const Editor = ({ user }: { user: User }) => {
     if (!presentation) return;
     const newSlide: Slide = {
       type,
-      points: ['quiz-single', 'quiz-multi', 'boolean', 'labeling', 'hotspot', 'open-question'].includes(type) ? 1 : undefined,
+      points: ['quiz-single', 'quiz-multi', 'boolean', 'labeling', 'hotspot', 'open-question', 'ordering', 'categorization'].includes(type) ? 1 : undefined,
       content: {
         title: type === 'title' ? 'Заглавие' : 'Нов Слайд',
         body: type === 'text-image' ? 'Въведете текст тук...' : '',
@@ -1336,6 +1203,16 @@ const Editor = ({ user }: { user: User }) => {
         ] : undefined,
         labels: type === 'labeling' ? [] : undefined,
         pairs: type === 'matching' ? [] : undefined,
+        orderingItems: type === 'ordering' ? [
+          { id: nanoid(), text: 'Първи елемент' },
+          { id: nanoid(), text: 'Втори елемент' },
+          { id: nanoid(), text: 'Трети елемент' }
+        ] : undefined,
+        categories: type === 'categorization' ? ['Категория 1', 'Категория 2'] : undefined,
+        categoryItems: type === 'categorization' ? [
+          { id: nanoid(), text: 'Елемент 1', category: 'Категория 1' },
+          { id: nanoid(), text: 'Елемент 2', category: 'Категория 2' }
+        ] : undefined,
         hotspot: type === 'hotspot' ? { x: 50, y: 50, radius: 10 } : undefined,
         imageUrl: (type === 'text-image' || type === 'labeling' || type === 'hotspot' || type === 'whiteboard') ? '' : undefined,
         videoUrl: type === 'video' ? '' : undefined,
@@ -1745,23 +1622,6 @@ const Editor = ({ user }: { user: User }) => {
                   onChange={e => setPresentation({ ...presentation, globalBackgroundImage: e.target.value })}
                 />
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-2">Тема</label>
-                <div className="grid grid-cols-5 gap-2">
-                  {['light', 'dark', 'indigo', 'emerald', 'sunset'].map(t => (
-                    <button 
-                      key={t}
-                      onClick={() => setPresentation({ ...presentation, theme: t as any })}
-                      className={`w-full aspect-square rounded-lg border-2 transition-all ${presentation.theme === t ? 'border-indigo-600 scale-110' : 'border-transparent'} ${
-                        t === 'light' ? 'bg-white' : 
-                        t === 'dark' ? 'bg-gray-900' : 
-                        t === 'indigo' ? 'bg-indigo-600' : 
-                        t === 'emerald' ? 'bg-emerald-600' : 'bg-orange-500'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
             </div>
           </div>
         </div>
@@ -1861,8 +1721,8 @@ const Editor = ({ user }: { user: User }) => {
                         {[
                           { id: 'left', label: 'Ляво', icon: ChevronLeft },
                           { id: 'right', label: 'Дясно', icon: ChevronRight },
-                          { id: 'top', label: 'Горе', icon: ChevronLeft, rotate: 90 },
-                          { id: 'bottom', label: 'Долу', icon: ChevronLeft, rotate: -90 },
+                          { id: 'top', label: 'Горе', icon: ChevronUp },
+                          { id: 'bottom', label: 'Долу', icon: ChevronDown },
                           { id: 'full', label: 'Текст', icon: Type }
                         ].map(l => (
                           <button 
@@ -1870,7 +1730,7 @@ const Editor = ({ user }: { user: User }) => {
                             onClick={() => updateContent({ layout: l.id })}
                             className={`flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition-all ${activeSlide.content.layout === l.id ? 'border-indigo-600 bg-white shadow-sm' : 'border-transparent hover:bg-white/50'}`}
                           >
-                            <l.icon className={`w-4 h-4 text-indigo-600 ${l.rotate ? `rotate-${l.rotate}` : ''}`} />
+                            <l.icon className="w-4 h-4 text-indigo-600" />
                             <span className="text-[8px] font-bold uppercase">{l.label}</span>
                           </button>
                         ))}
@@ -2147,6 +2007,7 @@ const Editor = ({ user }: { user: User }) => {
                     <div className="space-y-3">
                       <label className="block text-xs font-bold text-gray-500 uppercase">Етикети и Зони за поставяне</label>
                       <p className="text-xs text-gray-400 mb-2">Поставете етикетите върху изображението. Тези позиции ще станат "зони за поставяне" за учениците.</p>
+                      <p className="text-[11px] text-indigo-500 mb-2">Напасване към мрежа: 2% (по-лесно позициониране)</p>
                       <div className="relative aspect-video bg-gray-100 rounded-xl overflow-hidden border border-gray-200 mb-4">
                         {activeSlide.content.imageUrl && (
                           <img src={activeSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50" alt="BG" />
@@ -2161,8 +2022,11 @@ const Editor = ({ user }: { user: User }) => {
                                 const container = document.getElementById('label-editor-container');
                                 if (container) {
                                   const rect = container.getBoundingClientRect();
-                                  const x = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
-                                  const y = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                                  const rawX = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
+                                  const rawY = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                                  const snap = (value: number, step = 2) => Math.round(value / step) * step;
+                                  const x = snap(rawX);
+                                  const y = snap(rawY);
                                   const newLabels = [...(activeSlide.content.labels || [])];
                                   newLabels[idx] = { ...newLabels[idx], x, y };
                                   updateContent({ labels: newLabels });
@@ -2255,8 +2119,99 @@ const Editor = ({ user }: { user: User }) => {
                   </div>
                 )}
 
+                {activeSlide.type === 'ordering' && (
+                  <div className="flex flex-col gap-4">
+                    <label className="block text-xs font-bold text-gray-500 uppercase">Елементи за подреждане (правилен ред)</label>
+                    <p className="text-xs text-gray-400">Учениците ще трябва да подредят елементите в точно този ред.</p>
+                    <div className="space-y-2">
+                      {(activeSlide.content.orderingItems || []).map((item, idx) => (
+                        <div key={item.id} className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl border border-gray-100">
+                          <span className="text-xs font-black text-gray-400 w-6 text-center">{idx + 1}</span>
+                          <input
+                            className="flex-1 p-2 border border-gray-200 rounded-lg text-sm"
+                            value={item.text}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.orderingItems || [])];
+                              next[idx] = { ...next[idx], text: e.target.value };
+                              updateContent({ orderingItems: next });
+                            }}
+                          />
+                          <Button variant="ghost" onClick={() => {
+                            const next = (activeSlide.content.orderingItems || []).filter((_, i) => i !== idx);
+                            updateContent({ orderingItems: next });
+                          }}><Trash2 className="w-4 h-4" /></Button>
+                        </div>
+                      ))}
+                    </div>
+                    <Button variant="secondary" onClick={() => {
+                      const next = [...(activeSlide.content.orderingItems || []), { id: nanoid(), text: 'Нов елемент' }];
+                      updateContent({ orderingItems: next });
+                    }}>+ Добави елемент</Button>
+                  </div>
+                )}
+
+                {activeSlide.type === 'categorization' && (
+                  <div className="flex flex-col gap-5">
+                    <label className="block text-xs font-bold text-gray-500 uppercase">Категории и елементи</label>
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-400">Категории</p>
+                      {(activeSlide.content.categories || []).map((cat, idx) => (
+                        <div key={idx} className="flex gap-2">
+                          <input className="flex-1 p-2 border border-gray-200 rounded-lg text-sm" value={cat}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.categories || [])];
+                              const oldCat = next[idx];
+                              next[idx] = e.target.value;
+                              const items = (activeSlide.content.categoryItems || []).map(it => it.category === oldCat ? { ...it, category: e.target.value } : it);
+                              updateContent({ categories: next, categoryItems: items });
+                            }}
+                          />
+                          <Button variant="ghost" onClick={() => {
+                            const removeCat = (activeSlide.content.categories || [])[idx];
+                            const cats = (activeSlide.content.categories || []).filter((_, i) => i !== idx);
+                            const items = (activeSlide.content.categoryItems || []).filter(it => it.category !== removeCat);
+                            updateContent({ categories: cats, categoryItems: items });
+                          }}><Trash2 className="w-4 h-4" /></Button>
+                        </div>
+                      ))}
+                      <Button variant="secondary" onClick={() => updateContent({ categories: [...(activeSlide.content.categories || []), `Категория ${(activeSlide.content.categories || []).length + 1}`] })}>+ Добави категория</Button>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs text-gray-400">Елементи и правилна категория</p>
+                      {(activeSlide.content.categoryItems || []).map((item, idx) => (
+                        <div key={item.id} className="grid grid-cols-12 gap-2">
+                          <input className="col-span-7 p-2 border border-gray-200 rounded-lg text-sm" value={item.text}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.categoryItems || [])];
+                              next[idx] = { ...next[idx], text: e.target.value };
+                              updateContent({ categoryItems: next });
+                            }}
+                          />
+                          <select className="col-span-4 p-2 border border-gray-200 rounded-lg text-sm" value={item.category}
+                            onChange={e => {
+                              const next = [...(activeSlide.content.categoryItems || [])];
+                              next[idx] = { ...next[idx], category: e.target.value };
+                              updateContent({ categoryItems: next });
+                            }}>
+                            {(activeSlide.content.categories || []).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                          </select>
+                          <Button variant="ghost" className="col-span-1" onClick={() => {
+                            const next = (activeSlide.content.categoryItems || []).filter((_, i) => i !== idx);
+                            updateContent({ categoryItems: next });
+                          }}><Trash2 className="w-4 h-4" /></Button>
+                        </div>
+                      ))}
+                      <Button variant="secondary" onClick={() => {
+                        const fallback = (activeSlide.content.categories || [])[0] || 'Категория 1';
+                        const next = [...(activeSlide.content.categoryItems || []), { id: nanoid(), text: 'Нов елемент', category: fallback }];
+                        updateContent({ categoryItems: next });
+                      }}>+ Добави елемент</Button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Timer Settings */}
-                {['quiz-single', 'quiz-multi', 'open-question', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching'].includes(activeSlide.type) && (
+                {['quiz-single', 'quiz-multi', 'open-question', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching', 'ordering', 'categorization'].includes(activeSlide.type) && (
                   <div className="mt-12 pt-8 border-t border-gray-100">
                     <label className="block text-xs font-bold text-gray-400 uppercase mb-4">Настройки на времето</label>
                     <div className="flex items-center gap-4">
@@ -2309,11 +2264,31 @@ const HostView = ({ user }: { user: User }) => {
   const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [hostPrivacyMode, setHostPrivacyMode] = useState(false);
+  const [isSavingReport, setIsSavingReport] = useState(false);
+  const [isDownloadingReport, setIsDownloadingReport] = useState(false);
+  const [isReportSaved, setIsReportSaved] = useState(false);
+  const [hostOrderingPreview, setHostOrderingPreview] = useState<{ id: string; text: string }[]>([]);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
+  const latestPresentationRef = useRef<Presentation | null>(null);
+  const latestTeacherIdRef = useRef(user.id);
+  const latestPrivacyModeRef = useRef(false);
+
+  useEffect(() => {
+    latestPresentationRef.current = presentationData;
+  }, [presentationData]);
+
+  useEffect(() => {
+    latestTeacherIdRef.current = user.id;
+  }, [user.id]);
+
+  useEffect(() => {
+    latestPrivacyModeRef.current = hostPrivacyMode;
+  }, [hostPrivacyMode]);
   useEffect(() => {
     if (id) {
       // Fetch from API instead of Firestore
@@ -2346,6 +2321,20 @@ const HostView = ({ user }: { user: User }) => {
     }
     return () => clearTimeout(timerRef.current);
   }, [timeLeft]);
+
+  useEffect(() => {
+    if (currentSlide?.type === 'ordering') {
+      const next = [...(currentSlide.content.orderingItems || [])];
+      for (let i = next.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+      setHostOrderingPreview(next);
+      return;
+    }
+
+    setHostOrderingPreview([]);
+  }, [currentSlide]);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2395,23 +2384,44 @@ const HostView = ({ user }: { user: User }) => {
           setCurrentSlide(null);
           setIsFinished(true);
           // Auto-save report to database when finished via API
-          if (presentationData) {
-            fetch('/api/reports', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'teacher-id': user.id
-              },
-              body: JSON.stringify({
-                presentationId: presentationData.id,
-                presentationTitle: presentationData.title,
-                data: {
-                  students: msg.leaderboard,
-                  slides: presentationData.slides,
-                  date: new Date().toLocaleDateString("bg-BG")
+          const presentation = latestPresentationRef.current;
+          if (presentation) {
+            const token = localStorage.getItem('token');
+            void (async () => {
+              try {
+                setIsSavingReport(true);
+                const saveResponse = await fetch('/api/reports', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'teacher-id': latestTeacherIdRef.current,
+                    ...(token ? { Authorization: `Bearer ${token}` } : {})
+                  },
+                  body: JSON.stringify({
+                    presentationId: presentation.id,
+                    presentationTitle: presentation.title,
+                    privacyMode: latestPrivacyModeRef.current,
+                    data: {
+                      students: msg.leaderboard,
+                      slides: presentation.slides,
+                      date: new Date().toLocaleDateString("bg-BG")
+                    }
+                  })
+                });
+
+                if (!saveResponse.ok) {
+                  const errorBody = await saveResponse.text();
+                  throw new Error(`Auto-save report failed (${saveResponse.status}): ${errorBody}`);
                 }
-              })
-            }).catch(err => console.error("Auto-save report failed", err));
+
+                setIsReportSaved(true);
+                console.log('Report auto-saved successfully');
+              } catch (err) {
+                console.error("Auto-save report failed", err);
+              } finally {
+                setIsSavingReport(false);
+              }
+            })();
           }
           break;
       }
@@ -2426,31 +2436,56 @@ const HostView = ({ user }: { user: User }) => {
 
   const finishSession = async () => {
     if (!pin) return;
+    if (isSavingReport) return;
+    if (isReportSaved) {
+      navigate('/reports');
+      return;
+    }
+
     try {
+      setIsSavingReport(true);
+      const token = localStorage.getItem('token');
       const res = await fetch(`/api/sessions/${pin}/report`);
       const data = await res.json();
       
-      await fetch('/api/reports', {
+      const saveResponse = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'teacher-id': user.id,
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body: JSON.stringify({
           presentationId: id,
           presentationTitle: data.presentationTitle,
+          privacyMode: hostPrivacyMode,
           data: data
         })
       });
-      
+
+      if (!saveResponse.ok) {
+        const errorBody = await saveResponse.text();
+        throw new Error(`Report save failed (${saveResponse.status}): ${errorBody}`);
+      }
+
+      setIsReportSaved(true);
       navigate('/reports');
     } catch (err) {
       console.error("Failed to save report", err);
-      navigate('/');
+      alert('Не успяхме да запазим доклада в Архива. Опитайте отново.');
+    } finally {
+      setIsSavingReport(false);
     }
   };
 
   const downloadReport = async () => {
-    if (!pin) return;
+    if (!pin || isDownloadingReport) return;
+    setIsDownloadingReport(true);
     try {
       const res = await fetch(`/api/sessions/${pin}/report`);
+      if (!res.ok) {
+        throw new Error(`Report fetch failed (${res.status})`);
+      }
       const data = await res.json();
       
       const doc = new jsPDF();
@@ -2509,7 +2544,7 @@ const HostView = ({ user }: { user: User }) => {
       currentY += 10;
 
       data.slides.forEach((slide: any, idx: number) => {
-        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling'].includes(slide.type)) {
+        if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'ordering', 'categorization'].includes(slide.type)) {
           if (currentY > 250) {
             doc.addPage();
             currentY = 20;
@@ -2564,6 +2599,9 @@ const HostView = ({ user }: { user: User }) => {
       doc.save(`report-${pin}.pdf`);
     } catch (err) {
       console.error("Failed to download report", err);
+      alert('Не успяхме да изтеглим отчета. Опитайте отново.');
+    } finally {
+      setIsDownloadingReport(false);
     }
   };
 
@@ -2591,15 +2629,13 @@ const HostView = ({ user }: { user: User }) => {
     </div>
   );
 
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
-
   const startPresentation = () => {
     if (!pin) return;
     ws.current?.send(JSON.stringify({ 
       type: 'START_PRESENTATION', 
       pin, 
       presentationId: id,
-      privacyMode: isPrivacyMode 
+      privacyMode: hostPrivacyMode 
     }));
   };
 
@@ -2644,12 +2680,16 @@ const HostView = ({ user }: { user: User }) => {
                   <h4 className="text-indigo-600 font-bold mb-2">Общо ученици</h4>
                   <div className="text-5xl font-black">{students.length}</div>
                 </div>
-                <Button className="h-16 text-xl" onClick={downloadReport}>
-                  <Download className="w-6 h-6" /> Изтегли PDF Отчет
+                <Button className="h-16 text-xl" onClick={downloadReport} disabled={isDownloadingReport}>
+                  <Download className="w-6 h-6" /> {isDownloadingReport ? 'Генериране...' : 'Изтегли PDF Отчет'}
                 </Button>
-                <Button variant="secondary" className="h-16 text-xl" onClick={() => navigate('/')}>
+                <Button variant="secondary" className="h-16 text-xl" onClick={finishSession} disabled={isSavingReport}>
+                  {isSavingReport ? 'Запазване...' : isReportSaved ? 'Към Доклади' : 'Запази в Доклади'}
+                </Button>
+                <Button variant="ghost" className="h-16 text-xl" onClick={() => navigate('/')}>
                   Към Таблото
                 </Button>
+                <p className="text-xs text-gray-400">{isReportSaved ? 'Докладът е запазен в Архив.' : 'За да се появи в Архив на сесиите, натиснете „Запази в Доклади“.'}</p>
               </div>
             </div>
           </motion.div>
@@ -2734,8 +2774,8 @@ const HostView = ({ user }: { user: User }) => {
           <input 
             type="checkbox" 
             id="privacy-mode" 
-            checked={isPrivacyMode}
-            onChange={(e) => setIsPrivacyMode(e.target.checked)}
+            checked={hostPrivacyMode}
+            onChange={(e) => setHostPrivacyMode(e.target.checked)}
             className="w-5 h-5 rounded border-white/20 bg-white/10 text-indigo-500 focus:ring-indigo-500"
           />
           <label htmlFor="privacy-mode" className="text-sm font-bold flex items-center gap-2 cursor-pointer select-none">
@@ -3040,6 +3080,34 @@ const HostView = ({ user }: { user: User }) => {
               </div>
             )}
 
+            {currentSlide.type === 'ordering' && (
+              <div className="w-full max-w-2xl mx-auto space-y-3">
+                {(hostOrderingPreview.length > 0 ? hostOrderingPreview : (currentSlide.content.orderingItems || [])).map((item: any) => (
+                  <div key={item.id} className="bg-white border border-gray-100 rounded-xl p-4 font-bold text-gray-700 flex items-center gap-3">
+                    <span className="text-indigo-400">•</span>
+                    <span>{item.text}</span>
+                  </div>
+                ))}
+                <div className="text-center text-gray-400 font-bold uppercase tracking-widest pt-4">Елементите са разбъркани за преглед (без верен ред). {Object.keys(responses).length} отговора</div>
+              </div>
+            )}
+
+            {currentSlide.type === 'categorization' && (
+              <div className="w-full grid md:grid-cols-3 gap-4">
+                {(currentSlide.content.categories || []).map((cat: string) => (
+                  <div key={cat} className="bg-white rounded-2xl border border-gray-100 p-4">
+                    <h4 className="font-black text-indigo-600 mb-3">{cat}</h4>
+                    <div className="space-y-2">
+                      {(currentSlide.content.categoryItems || []).filter((it: any) => it.category === cat).map((it: any) => (
+                        <div key={it.id} className="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 font-semibold text-sm">{it.text}</div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <div className="md:col-span-3 text-center text-gray-400 font-bold uppercase tracking-widest">Учениците категоризират елементите... ({Object.keys(responses).length} отговора)</div>
+              </div>
+            )}
+
             {currentSlide.type === 'open-question' && (
               <div className="w-full grid grid-cols-2 gap-4 overflow-y-auto max-h-[400px] p-4">
                 <AnimatePresence>
@@ -3246,6 +3314,10 @@ const StudentView = () => {
   const [multiResponses, setMultiResponses] = useState<number[]>([]);
   const [matchingConnections, setMatchingConnections] = useState<Record<string, string>>({});
   const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
+  const [orderingResponse, setOrderingResponse] = useState<{ id: string; text: string }[]>([]);
+  const [draggedOrderingIndex, setDraggedOrderingIndex] = useState<number | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
 
   const submitResponse = (response: any) => {
     ws.current?.send(JSON.stringify({ type: 'SUBMIT_RESPONSE', response }));
@@ -3273,6 +3345,19 @@ const StudentView = () => {
         [items[i], items[j]] = [items[j], items[i]];
       }
       setShuffledRightItems(items);
+    }
+    if (currentSlide?.type === 'ordering') {
+      const items = [...(currentSlide.content.orderingItems || [])];
+      for (let i = items.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [items[i], items[j]] = [items[j], items[i]];
+      }
+      setOrderingResponse(items);
+      setDraggedOrderingIndex(null);
+    }
+    if (currentSlide?.type === 'categorization') {
+      setSelectedCategory((currentSlide.content.categories || [])[0] || null);
+      setCategorizationResponse({});
     }
   }, [currentSlide]);
 
@@ -3626,9 +3711,113 @@ const StudentView = () => {
               </Button>
             )}
           </div>
-        ) : currentSlide.type === 'labeling' ? (
+        
+        ) : currentSlide.type === 'ordering' ? (
           <div className="flex-1 flex flex-col gap-6">
-            <p className="text-center text-gray-500 font-medium">Поставете етикетите в правилните зони</p>
+            <p className="text-center text-gray-500 font-medium">Подредете елементите в правилен ред</p>
+            {!submitted && (
+              <div className="flex items-center justify-center gap-3">
+                <Button variant="secondary" className="px-4 py-2" onClick={() => {
+                  const next = [...orderingResponse];
+                  for (let i = next.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [next[i], next[j]] = [next[j], next[i]];
+                  }
+                  setOrderingResponse(next);
+                  setDraggedOrderingIndex(null);
+                }}>
+                  Разбъркай
+                </Button>
+                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">{orderingResponse.length} елемента</div>
+              </div>
+            )}
+            <div className="space-y-3">
+              {orderingResponse.map((item, idx) => (
+                <div
+                  key={item.id}
+                  draggable={!submitted}
+                  onDragStart={() => {
+                    if (submitted) return;
+                    setDraggedOrderingIndex(idx);
+                  }}
+                  onDragOver={(e) => {
+                    if (submitted) return;
+                    e.preventDefault();
+                  }}
+                  onDrop={() => {
+                    if (submitted || draggedOrderingIndex === null || draggedOrderingIndex === idx) return;
+                    const next = [...orderingResponse];
+                    const [moved] = next.splice(draggedOrderingIndex, 1);
+                    next.splice(idx, 0, moved);
+                    setOrderingResponse(next);
+                    setDraggedOrderingIndex(idx);
+                  }}
+                  onDragEnd={() => setDraggedOrderingIndex(null)}
+                  className={`bg-white p-4 rounded-xl border flex items-center gap-3 transition ${draggedOrderingIndex === idx ? 'border-indigo-300 shadow-sm' : 'border-gray-100'} ${submitted ? '' : 'cursor-grab active:cursor-grabbing'}`}
+                >
+                  <span className="w-6 text-center font-black text-indigo-400">{idx + 1}</span>
+                  <div className="flex-1 font-semibold text-gray-700">{item.text}</div>
+                  {!submitted && <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Провлечи</span>}
+                </div>
+              ))}
+            </div>
+            {!submitted && (
+              <Button className="h-16 text-xl" onClick={() => submitResponse(orderingResponse.map(i => i.id))} disabled={orderingResponse.length === 0}>Изпрати подреждането</Button>
+            )}
+          </div>
+        ) : currentSlide.type === 'categorization' ? (
+          <div className="flex-1 flex flex-col gap-6">
+            <p className="text-center text-gray-500 font-medium">Изберете категория и поставете елементите</p>
+            <div className="text-center text-xs font-bold text-gray-400 uppercase tracking-widest">
+              {Object.keys(categorizationResponse).length}/{currentSlide.content.categoryItems?.length || 0} разпределени
+            </div>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {(currentSlide.content.categories || []).map((cat: string) => (
+                <button key={cat} onClick={() => setSelectedCategory(cat)} className={`px-4 py-2 rounded-full border text-sm font-bold ${selectedCategory === cat ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-200 text-gray-600'}`}>{cat}</button>
+              ))}
+            </div>
+            {!submitted && (
+              <div className="flex items-center justify-center">
+                <Button variant="secondary" className="px-4 py-2" onClick={() => setCategorizationResponse({})}>Нулирай</Button>
+              </div>
+            )}
+            {!submitted && (
+              <div className="bg-white p-4 rounded-2xl border border-gray-100 flex flex-wrap gap-2 justify-center">
+                {(currentSlide.content.categoryItems || []).filter((it: any) => !categorizationResponse[it.id]).map((it: any) => (
+                  <button key={it.id} onClick={() => {
+                    if (!selectedCategory) return;
+                    setCategorizationResponse(prev => ({ ...prev, [it.id]: selectedCategory }));
+                  }} className="px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold text-sm">{it.text}</button>
+                ))}
+              </div>
+            )}
+            <div className="grid md:grid-cols-3 gap-3">
+              {(currentSlide.content.categories || []).map((cat: string) => (
+                <div key={cat} className="bg-white rounded-2xl border border-gray-100 p-3">
+                  <h4 className="font-black text-indigo-600 mb-2">{cat}</h4>
+                  <div className="space-y-2 min-h-16">
+                    {Object.entries(categorizationResponse).filter(([,c]) => c === cat).map(([itemId]) => {
+                      const it = (currentSlide.content.categoryItems || []).find((x: any) => x.id === itemId);
+                      if (!it) return null;
+                      return (
+                        <button key={itemId} disabled={submitted} onClick={() => {
+                          const next = { ...categorizationResponse };
+                          delete next[itemId];
+                          setCategorizationResponse(next);
+                        }} className="w-full text-left px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold text-sm">{it.text}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {!submitted && (
+              <Button className="h-16 text-xl" onClick={() => submitResponse(categorizationResponse)} disabled={Object.keys(categorizationResponse).length < (currentSlide.content.categoryItems?.length || 0)}>Изпрати категоризациите</Button>
+            )}
+          </div>
+) : currentSlide.type === 'labeling' ? (
+          <div className="flex-1 flex flex-col gap-6">
+            <p className="text-center text-gray-500 font-medium">Поставете етикетите в правилните зони (има магнитно напасване при близост)</p>
             
             {/* Label Tray */}
             {!submitted && (
@@ -3638,8 +3827,12 @@ const StudentView = () => {
                     key={`tray-${label.id}`}
                     className="bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100 font-bold text-indigo-600 cursor-pointer hover:bg-indigo-100 transition-colors"
                     onClick={() => {
-                      // Initial placement in center if clicked
-                      setLabelPositions(prev => ({ ...prev, [label.id]: { x: 50, y: 50 } }));
+                      const zones = currentSlide.content.labels || [];
+                      const occupied = new Set(Object.keys(labelPositions));
+                      const firstFreeZone = zones.find((z: any) => !occupied.has(z.id));
+                      const x = firstFreeZone?.x ?? 50;
+                      const y = firstFreeZone?.y ?? 50;
+                      setLabelPositions(prev => ({ ...prev, [label.id]: { x, y } }));
                     }}
                   >
                     {label.text}
@@ -3692,8 +3885,19 @@ const StudentView = () => {
                         const container = document.getElementById('student-label-container');
                         if (container) {
                           const rect = container.getBoundingClientRect();
-                          const x = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
-                          const y = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                          const rawX = Math.max(0, Math.min(100, ((info.point.x - rect.left) / rect.width) * 100));
+                          const rawY = Math.max(0, Math.min(100, ((info.point.y - rect.top) / rect.height) * 100));
+                          const snap = (value: number, step = 2) => Math.round(value / step) * step;
+                          const zones = currentSlide.content.labels || [];
+                          const nearestZone = zones.reduce((best: any, zone: any) => {
+                            const dist = Math.hypot(rawX - zone.x, rawY - zone.y);
+                            if (!best || dist < best.dist) return { zone, dist };
+                            return best;
+                          }, null);
+
+                          const shouldMagnet = nearestZone && nearestZone.dist <= 14;
+                          const x = shouldMagnet ? nearestZone.zone.x : snap(rawX);
+                          const y = shouldMagnet ? nearestZone.zone.y : snap(rawY);
                           setLabelPositions(prev => ({ ...prev, [label.id]: { x, y } }));
                         }
                       }}
@@ -3792,6 +3996,7 @@ export default function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('teacher_user');
+    localStorage.removeItem('token');
   };
 
   if (!user) {
