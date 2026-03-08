@@ -39,7 +39,6 @@ import {
   XCircle,
   Trophy,
   Link as LinkIcon,
-  Chrome,
   Shield,
   ShieldCheck
 } from 'lucide-react';
@@ -64,8 +63,6 @@ import { auth, db } from './lib/firebase';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  signInWithPopup, 
-  GoogleAuthProvider,
   onAuthStateChanged,
   signOut,
   updateProfile
@@ -354,22 +351,8 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
           </p>
         </div>
 
-        <div className="space-y-4 mb-8">
-          <Button 
-            variant="secondary" 
-            className="w-full h-14 rounded-2xl border-2 border-slate-100 hover:bg-slate-50"
-            onClick={handleGoogleSignIn}
-            disabled={loading}
-          >
-            <Chrome className="w-5 h-5 text-indigo-500" />
-            Влез с Google
-          </Button>
-          
-          <div className="relative flex items-center py-2">
-            <div className="flex-grow border-t border-slate-100"></div>
-            <span className="flex-shrink mx-4 text-slate-300 text-[10px] font-black uppercase tracking-widest">или</span>
-            <div className="flex-grow border-t border-slate-100"></div>
-          </div>
+        <div className="mb-6">
+          <p className="text-xs text-slate-400 font-bold uppercase tracking-widest text-center">Вход с имейл и парола</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-5">
