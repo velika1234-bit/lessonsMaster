@@ -1686,23 +1686,6 @@ const Editor = ({ user }: { user: User }) => {
                   onChange={e => setPresentation({ ...presentation, globalBackgroundImage: e.target.value })}
                 />
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-2">Тема</label>
-                <div className="grid grid-cols-5 gap-2">
-                  {['light', 'dark', 'indigo', 'emerald', 'sunset'].map(t => (
-                    <button 
-                      key={t}
-                      onClick={() => setPresentation({ ...presentation, theme: t as any })}
-                      className={`w-full aspect-square rounded-lg border-2 transition-all ${presentation.theme === t ? 'border-indigo-600 scale-110' : 'border-transparent'} ${
-                        t === 'light' ? 'bg-white' : 
-                        t === 'dark' ? 'bg-gray-900' : 
-                        t === 'indigo' ? 'bg-indigo-600' : 
-                        t === 'emerald' ? 'bg-emerald-600' : 'bg-orange-500'
-                      }`}
-                    />
-                  ))}
-                </div>
-              </div>
             </div>
           </div>
         </div>
