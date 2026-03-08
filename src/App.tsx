@@ -2246,6 +2246,7 @@ const HostView = ({ user }: { user: User }) => {
   const latestPresentationRef = useRef<Presentation | null>(null);
   const latestTeacherIdRef = useRef(user.id);
   const latestPrivacyModeRef = useRef(false);
+  const latestPinRef = useRef<string | null>(null);
 
   useEffect(() => {
     latestPresentationRef.current = presentationData;
@@ -2258,6 +2259,10 @@ const HostView = ({ user }: { user: User }) => {
   useEffect(() => {
     latestPrivacyModeRef.current = hostPrivacyMode;
   }, [hostPrivacyMode]);
+
+  useEffect(() => {
+    latestPinRef.current = pin;
+  }, [pin]);
   useEffect(() => {
     if (id) {
       // Fetch from API instead of Firestore
@@ -2359,6 +2364,16 @@ const HostView = ({ user }: { user: User }) => {
             void (async () => {
               try {
                 setIsSavingReport(true);
+                const activePin = latestPinRef.current;
+                if (!activePin) throw new Error('Missing PIN for auto-save report');
+
+                const sessionReportRes = await fetch(`/api/sessions/${activePin}/report`);
+                if (!sessionReportRes.ok) {
+                  const errorBody = await sessionReportRes.text();
+                  throw new Error(`Session report fetch failed (${sessionReportRes.status}): ${errorBody}`);
+                }
+                const sessionReportData = await sessionReportRes.json();
+
                 const saveResponse = await fetch('/api/reports', {
                   method: 'POST',
                   headers: {
@@ -2368,13 +2383,9 @@ const HostView = ({ user }: { user: User }) => {
                   },
                   body: JSON.stringify({
                     presentationId: presentation.id,
-                    presentationTitle: presentation.title,
+                    presentationTitle: sessionReportData.presentationTitle || presentation.title,
                     privacyMode: latestPrivacyModeRef.current,
-                    data: {
-                      students: msg.leaderboard,
-                      slides: presentation.slides,
-                      date: new Date().toLocaleDateString("bg-BG")
-                    }
+                    data: sessionReportData
                   })
                 });
 
