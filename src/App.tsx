@@ -130,6 +130,52 @@ const getAIInstance = () => {
 
 // --- Components ---
 
+
+const isResponseCorrectForSlide = (slide: any, response: any) => {
+  if (response === undefined || response === null) return false;
+
+  if (slide.type === 'quiz-single' || slide.type === 'boolean') {
+    const correctIdx = slide.content.options?.findIndex((o: any) => o.isCorrect);
+    return response === correctIdx;
+  }
+
+  if (slide.type === 'quiz-multi') {
+    const correctIndices = (slide.content.options || [])
+      .map((o: any, i: number) => (o.isCorrect ? i : -1))
+      .filter((i: number) => i !== -1);
+    return Array.isArray(response)
+      && response.length === correctIndices.length
+      && response.every((r: any) => correctIndices.includes(r));
+  }
+
+  if (slide.type === 'hotspot') {
+    const hotspot = slide.content.hotspot;
+    if (!hotspot || typeof response?.x !== 'number' || typeof response?.y !== 'number') return false;
+    const dist = Math.sqrt(Math.pow(response.x - hotspot.x, 2) + Math.pow(response.y - hotspot.y, 2));
+    return dist <= hotspot.radius;
+  }
+
+  if (slide.type === 'matching') {
+    const pairs = slide.content.pairs || [];
+    if (pairs.length === 0 || !response || typeof response !== 'object') return false;
+    return pairs.every((p: any) => response[p.id] === p.id);
+  }
+
+  if (slide.type === 'ordering') {
+    const orderingItems = slide.content.orderingItems || [];
+    if (!Array.isArray(response) || response.length !== orderingItems.length) return false;
+    return orderingItems.every((item: any, index: number) => response[index] === item.id || response[index] === item.text);
+  }
+
+  if (slide.type === 'categorization') {
+    const categoryItems = slide.content.categoryItems || [];
+    if (!response || typeof response !== 'object') return false;
+    return categoryItems.every((item: any) => response[item.id] === item.category || response[item.text] === item.category);
+  }
+
+  return false;
+};
+
 // --- Auth Components ---
 
 // --- Pages ---
@@ -140,6 +186,7 @@ const ReportsDashboard = ({ user }: { user: User }) => {
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+
 
   useEffect(() => {
     const fetchReports = async () => {
@@ -209,6 +256,53 @@ const ReportDetail = ({ user }: { user: User }) => {
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
+  const reportAnalytics = useMemo(() => {
+    if (!report?.data?.students) return null;
+
+    const students = [...report.data.students].sort((a: any, b: any) => b.score - a.score);
+    const totalStudents = students.length;
+    const totalSlides = report.data?.slides?.length || 0;
+    const averageScore = totalStudents
+      ? students.reduce((acc: number, s: any) => acc + (s.score || 0), 0) / totalStudents
+      : 0;
+
+
+    const answerableSlideTypes = new Set(['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization']);
+    const slideStats = (report.data?.slides || [])
+      .map((slide: any, idx: number) => {
+        if (!answerableSlideTypes.has(slide.type)) return null;
+        const responses = students
+          .map((student: any) => student.responses?.[idx])
+          .filter((response: any) => response !== undefined && response !== null);
+
+        const correctCount = responses.filter((response: any) => isResponseCorrectForSlide(slide, response)).length;
+        const participation = totalStudents ? (responses.length / totalStudents) * 100 : 0;
+        const accuracy = responses.length ? (correctCount / responses.length) * 100 : 0;
+
+        return {
+          index: idx,
+          title: slide.content?.title || `Въпрос ${idx + 1}`,
+          type: slide.type,
+          responsesCount: responses.length,
+          correctCount,
+          participation,
+          accuracy,
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => b.accuracy - a.accuracy);
+
+    return {
+      students,
+      totalStudents,
+      totalSlides,
+      averageScore,
+      topStudent: students[0],
+      lowStudent: students[students.length - 1],
+      slideStats,
+    };
+  }, [report]);
+
   useEffect(() => {
     const fetchReport = async () => {
       try {
@@ -254,9 +348,8 @@ const ReportDetail = ({ user }: { user: User }) => {
     const dateStr = report.createdAt ? new Date(report.createdAt).toLocaleDateString('bg-BG') : '...';
     doc.text(`Дата: ${dateStr}`, 20, 45);
     
-    const tableData = report.data.students
-      .sort((a: any, b: any) => b.score - a.score)
-      .map((s: any, i: number) => [i + 1, s.name, s.score]);
+    const sortedStudents = [...(report.data.students || [])].sort((a: any, b: any) => b.score - a.score);
+    const tableData = sortedStudents.map((student: any, i: number) => [i + 1, student.name, student.score]);
 
     autoTable(doc, {
       startY: 60,
@@ -272,45 +365,39 @@ const ReportDetail = ({ user }: { user: User }) => {
     doc.text("Анализ по въпроси", 20, currentY);
     currentY += 10;
 
-    report.data.slides.forEach((slide: any, idx: number) => {
-      if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) {
-        if (currentY > 250) {
-          doc.addPage();
-          currentY = 20;
-          doc.setFont('Roboto');
-        }
-        const responses = report.data.students.map((s: any) => s.responses[idx]).filter((r: any) => r !== undefined);
-        let correctCount = 0;
-        responses.forEach((resp: any) => {
-          let isCorrect = false;
-          if (slide.type === 'quiz-single' || slide.type === 'boolean') {
-            const correctIdx = slide.content.options.findIndex((o: any) => o.isCorrect);
-            if (resp === correctIdx) isCorrect = true;
-          } else if (slide.type === 'quiz-multi') {
-            const correctIndices = slide.content.options.map((o: any, i: number) => o.isCorrect ? i : -1).filter((i: number) => i !== -1);
-            isCorrect = Array.isArray(resp) && resp.length === correctIndices.length && resp.every((r: any) => correctIndices.includes(r));
-          } else if (slide.type === 'hotspot') {
-            const hotspot = slide.content.hotspot;
-            if (hotspot && resp) {
-              const dist = Math.sqrt(Math.pow(resp.x - hotspot.x, 2) + Math.pow(resp.y - hotspot.y, 2));
-              if (dist <= hotspot.radius) isCorrect = true;
-            }
-          } else if (slide.type === 'matching') {
-            const pairs = slide.content.pairs || [];
-            let matchedCount = 0;
-            pairs.forEach((p: any) => {
-              if (resp[p.id] === p.id) matchedCount++;
-            });
-            if (pairs.length > 0 && matchedCount === pairs.length) isCorrect = true;
-          }
-          if (isCorrect) correctCount++;
-        });
-        doc.setFontSize(12);
-        doc.text(`${idx + 1}. ${slide.content.title}`, 20, currentY);
-        currentY += 7;
-        doc.text(`Успеваемост: ${((correctCount / (report.data.students.length || 1)) * 100).toFixed(1)}% (${correctCount}/${report.data.students.length})`, 20, currentY);
-        currentY += 15;
+    const questionStats = (report.data.slides || [])
+      .map((slide: any, idx: number) => {
+        if (!['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) return null;
+        const responses = sortedStudents.map((student: any) => student.responses?.[idx]).filter((response: any) => response !== undefined && response !== null);
+        const correctCount = responses.filter((response: any) => isResponseCorrectForSlide(slide, response)).length;
+        const accuracy = responses.length ? (correctCount / responses.length) * 100 : 0;
+        const participation = sortedStudents.length ? (responses.length / sortedStudents.length) * 100 : 0;
+
+        return {
+          idx,
+          title: slide.content?.title || `Въпрос ${idx + 1}`,
+          accuracy,
+          participation,
+          correctCount,
+          responses: responses.length,
+        };
+      })
+      .filter(Boolean);
+
+    questionStats.forEach((item: any) => {
+      if (currentY > 250) {
+        doc.addPage();
+        currentY = 20;
+        doc.setFont('Roboto');
       }
+
+      doc.setFontSize(12);
+      doc.text(`${item.idx + 1}. ${item.title}`, 20, currentY);
+      currentY += 7;
+      doc.text(`Успеваемост: ${item.accuracy.toFixed(1)}% (${item.correctCount}/${item.responses})`, 20, currentY);
+      currentY += 7;
+      doc.text(`Участие: ${item.participation.toFixed(1)}%`, 20, currentY);
+      currentY += 10;
     });
 
     doc.save(`report-${report.id}.pdf`);
@@ -354,29 +441,74 @@ const ReportDetail = ({ user }: { user: User }) => {
         </p>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <Card className="text-center">
-          <div className="text-3xl font-black text-indigo-600 mb-1">{report.data?.students?.length || 0}</div>
+          <div className="text-3xl font-black text-indigo-600 mb-1">{reportAnalytics?.totalStudents || 0}</div>
           <div className="text-xs font-bold text-gray-400 uppercase">Ученици</div>
         </Card>
         <Card className="text-center">
-          <div className="text-3xl font-black text-green-600 mb-1">
-            {report.data?.students ? Math.round(report.data.students.reduce((acc: number, s: any) => acc + s.score, 0) / (report.data.students.length || 1)) : 0}
-          </div>
+          <div className="text-3xl font-black text-green-600 mb-1">{Math.round(reportAnalytics?.averageScore || 0)}</div>
           <div className="text-xs font-bold text-gray-400 uppercase">Среден резултат</div>
         </Card>
         <Card className="text-center">
-          <div className="text-3xl font-black text-orange-600 mb-1">
-            {report.data?.slides?.length || 0}
-          </div>
+          <div className="text-3xl font-black text-orange-600 mb-1">{reportAnalytics?.totalSlides || 0}</div>
           <div className="text-xs font-bold text-gray-400 uppercase">Слайда</div>
+        </Card>
+        <Card className="text-center">
+          <div className="text-3xl font-black text-purple-600 mb-1">{Math.round((reportAnalytics?.slideStats?.reduce((acc: number, s: any) => acc + s.accuracy, 0) || 0) / ((reportAnalytics?.slideStats?.length || 1))) || 0}%</div>
+          <div className="text-xs font-bold text-gray-400 uppercase">Средна успеваемост</div>
         </Card>
       </div>
 
-      <Card>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <Card>
+          <h2 className="text-lg font-black mb-4">Топ представяне</h2>
+          {reportAnalytics?.topStudent ? (
+            <div className="flex items-center justify-between p-4 bg-emerald-50 rounded-xl border border-emerald-100">
+              <span className="font-bold text-emerald-900">{reportAnalytics.topStudent.name}</span>
+              <span className="text-emerald-700 font-black">{reportAnalytics.topStudent.score} т.</span>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">Няма налични данни.</p>
+          )}
+        </Card>
+        <Card>
+          <h2 className="text-lg font-black mb-4">Най-нисък резултат</h2>
+          {reportAnalytics?.lowStudent ? (
+            <div className="flex items-center justify-between p-4 bg-amber-50 rounded-xl border border-amber-100">
+              <span className="font-bold text-amber-900">{reportAnalytics.lowStudent.name}</span>
+              <span className="text-amber-700 font-black">{reportAnalytics.lowStudent.score} т.</span>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">Няма налични данни.</p>
+          )}
+        </Card>
+      </div>
+
+      <Card className="mb-8">
+        <h2 className="text-xl font-bold mb-6">Успеваемост по въпроси</h2>
+        <div className="h-72">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={(reportAnalytics?.slideStats || []).slice(0, 12).map((slide: any) => ({
+              name: `#${slide.index + 1}`,
+              accuracy: Number(slide.accuracy.toFixed(1)),
+              participation: Number(slide.participation.toFixed(1)),
+            }))}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="name" tick={{ fill: '#64748b', fontSize: 12 }} />
+              <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="accuracy" name="Успеваемост %" fill="#4f46e5" radius={[8, 8, 0, 0]} />
+              <Bar dataKey="participation" name="Участие %" fill="#10b981" radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <Card className="mb-8">
         <h2 className="text-xl font-bold mb-6">Резултати по ученици</h2>
         <div className="space-y-4">
-          {report.data?.students?.sort((a: any, b: any) => b.score - a.score).map((student: any, idx: number) => (
+          {(reportAnalytics?.students || []).map((student: any, idx: number) => (
             <div key={idx} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
               <div className="flex items-center gap-4">
                 <div className="w-8 h-8 bg-white rounded-lg flex items-center justify-center font-bold text-indigo-600 shadow-sm">
@@ -384,9 +516,25 @@ const ReportDetail = ({ user }: { user: User }) => {
                 </div>
                 <span className="font-bold text-gray-700">{student.name}</span>
               </div>
-              <div className="flex items-center gap-4">
-                <div className="text-sm font-bold text-indigo-600">{student.score} т.</div>
+              <div className="text-sm font-bold text-indigo-600">{student.score} т.</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="text-xl font-bold mb-6">Детайл по въпроси</h2>
+        <div className="space-y-3">
+          {(reportAnalytics?.slideStats || []).map((slide: any) => (
+            <div key={slide.index} className="p-4 rounded-xl border border-gray-100 bg-white">
+              <div className="flex justify-between items-center gap-3 mb-2">
+                <div className="font-semibold text-gray-800">#{slide.index + 1} • {slide.title}</div>
+                <div className="text-sm font-bold text-indigo-600">{slide.accuracy.toFixed(1)}%</div>
               </div>
+              <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden mb-2">
+                <div className="h-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, slide.accuracy))}%` }} />
+              </div>
+              <div className="text-xs text-gray-500">Отговорили: {slide.responsesCount}/{reportAnalytics?.totalStudents || 0} • Верни: {slide.correctCount}</div>
             </div>
           ))}
         </div>
@@ -403,6 +551,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
   const [aiSourceText, setAiSourceText] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const navigate = useNavigate();
+
 
   useEffect(() => {
     const fetchPresentations = async () => {
@@ -3010,6 +3159,7 @@ const StudentView = () => {
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
+
 
   useEffect(() => {
     if (timeLeft !== null && timeLeft > 0) {
