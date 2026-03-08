@@ -31,7 +31,6 @@ import {
   Palette,
   Zap,
   FileText,
-  History,
   ArrowLeft,
   Save,
   Settings,
@@ -55,6 +54,10 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { Button } from './components/ui/Button';
+import { Card } from './components/ui/Card';
+import { ReportsList } from './components/dashboard/ReportsList';
+import { PresentationsList } from './components/dashboard/PresentationsList';
 import { auth, db } from './lib/firebase';
 import { 
   signInWithEmailAndPassword, 
@@ -207,33 +210,6 @@ interface Presentation {
 }
 
 // --- Components ---
-
-const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, loading = false, title }: any) => {
-  const base = "px-6 py-3 rounded-2xl font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 shadow-sm";
-  const variants: any = {
-    primary: "bg-indigo-500 text-white hover:bg-indigo-600 shadow-lg shadow-indigo-100",
-    secondary: "bg-white text-indigo-600 border-2 border-indigo-50 hover:bg-indigo-50",
-    danger: "bg-rose-50 text-rose-600 hover:bg-rose-100 border-2 border-rose-100",
-    ghost: "text-gray-400 hover:bg-gray-50 hover:text-gray-600 rounded-xl"
-  };
-  
-  return (
-    <button 
-      onClick={onClick} 
-      disabled={disabled || loading}
-      className={`${base} ${variants[variant]} ${className}`}
-      title={title}
-    >
-      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : children}
-    </button>
-  );
-};
-
-const Card = ({ children, className = "" }: any) => (
-  <div className={`bg-white rounded-3xl border border-gray-50 shadow-xl shadow-gray-100/50 p-8 ${className}`}>
-    {children}
-  </div>
-);
 
 // --- Auth Components ---
 
@@ -428,6 +404,8 @@ const Auth = ({ onLogin }: { onLogin: (user: User) => void }) => {
 
 // --- Pages ---
 
+// --- Components ---
+
 const ReportsDashboard = ({ user }: { user: User }) => {
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -484,35 +462,11 @@ const ReportsDashboard = ({ user }: { user: User }) => {
         </div>
       ) : (
         <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden">
-          {reports.length > 0 ? reports.map(report => (
-            <div key={report.id} className="flex items-center justify-between gap-4 px-6 py-4 border-b border-gray-100 last:border-b-0 hover:bg-indigo-50/40 transition-colors">
-              <div className="min-w-0 flex items-center gap-4">
-                <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
-                  <History className="w-5 h-5" />
-                </div>
-                <div className="min-w-0">
-                  <h3 className="text-base font-black text-gray-900 truncate">{report.presentationTitle}</h3>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-gray-400 mt-1">
-                    <span>{report.createdAt ? new Date(report.createdAt).toLocaleDateString('bg-BG') : '...'}</span>
-                    <span className="flex items-center gap-1"><Users className="w-3 h-3 text-indigo-500" /> {report.data?.students?.length || 0}</span>
-                    <span className="flex items-center gap-1 text-emerald-500"><Award className="w-3 h-3" /> {report.data?.students ? Math.max(...report.data.students.map((s: any) => s.score), 0) : 0} макс.</span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <Button variant="secondary" className="h-10 px-4" onClick={() => navigate(`/reports/${report.id}`)}>
-                  <BarChart3 className="w-4 h-4 text-indigo-600" /> Преглед
-                </Button>
-                <Button variant="danger" className="h-10 px-3" onClick={() => deleteReport(report.id)}>
-                  <Trash2 className="w-4 h-4 text-rose-600" />
-                </Button>
-              </div>
-            </div>
-          )) : (
-            <div className="text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200 m-4">
-              <p className="text-gray-400">Все още нямате записани доклади.</p>
-            </div>
-          )}
+          <ReportsList
+            reports={reports}
+            onOpen={(reportId) => navigate(`/reports/${reportId}`)}
+            onDelete={deleteReport}
+          />
         </div>
       )}
     </div>
@@ -1043,58 +997,13 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
         </div>
       ) : (
         <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden">
-          {presentations.length > 0 ? presentations.map(p => (
-            <div key={p.id} className="flex items-center justify-between gap-4 px-6 py-4 border-b border-gray-100 last:border-b-0 hover:bg-indigo-50/40 transition-colors">
-              <div className="min-w-0 flex items-center gap-4">
-                <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
-                  <Layout className="w-5 h-5" />
-                </div>
-                <h3 className="text-base font-black text-gray-900 truncate">{p.title || 'Без заглавие'}</h3>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <Button 
-                  variant="secondary" 
-                  className="h-10 px-4" 
-                  onClick={() => navigate(`/edit/${p.id}`)}
-                  title="Редактиране"
-                >
-                  <Edit2 className="w-4 h-4 text-indigo-600" /> Редактирай
-                </Button>
-                <Button 
-                  variant="primary" 
-                  className="h-10 px-4" 
-                  onClick={() => navigate(`/host/${p.id}`)}
-                  title="Стартиране на урок"
-                >
-                  <Play className="w-4 h-4 text-white fill-current" /> Пусни
-                </Button>
-                <Button 
-                  variant="secondary" 
-                  className="h-10 px-3" 
-                  onClick={() => exportPresentation(p)}
-                  title="Изтегляне на файл"
-                >
-                  <Download className="w-4 h-4 text-indigo-600" />
-                </Button>
-                <Button 
-                  variant="danger" 
-                  className="h-10 px-3" 
-                  onClick={(e: any) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    deletePresentation(p.id);
-                  }}
-                  title="Изтриване"
-                >
-                  <Trash2 className="w-4 h-4 text-rose-600" />
-                </Button>
-              </div>
-            </div>
-          )) : (
-            <div className="text-center py-20 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200 m-4">
-              <p className="text-gray-400">Нямате създадени презентации още.</p>
-            </div>
-          )}
+          <PresentationsList
+            presentations={presentations}
+            onEdit={(presentationId) => navigate(`/edit/${presentationId}`)}
+            onHost={(presentationId) => navigate(`/host/${presentationId}`)}
+            onExport={exportPresentation}
+            onDelete={deletePresentation}
+          />
         </div>
       )}
     </div>
