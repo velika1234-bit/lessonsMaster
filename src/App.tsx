@@ -193,6 +193,25 @@ const isResponseCorrectForSlide = (slide: any, response: any) => {
     return categoryItems.every((item: any) => response[item.id] === item.category || response[item.text] === item.category);
   }
 
+  if (slide.type === 'open-question') {
+    const normalize = (value: string) => value
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ');
+
+    const expectedRaw = String(slide.content?.expectedAnswer || '').trim();
+    const learnerRaw = typeof response === 'string' ? response : String(response || '');
+    if (!expectedRaw || !learnerRaw.trim()) return false;
+
+    const expectedAnswers = expectedRaw
+      .split(/\r?\n|\|/)
+      .map((item: string) => normalize(item))
+      .filter(Boolean);
+
+    const learnerAnswer = normalize(learnerRaw);
+    return expectedAnswers.includes(learnerAnswer);
+  }
+
   return false;
 };
 
@@ -307,10 +326,11 @@ const ReportDetail = ({ user }: { user: User }) => {
       : 0;
 
 
-    const answerableSlideTypes = new Set(['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization']);
+    const answerableSlideTypes = new Set(['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization', 'open-question']);
     const slideStats = (report.data?.slides || [])
       .map((slide: any, idx: number) => {
         if (!answerableSlideTypes.has(slide.type)) return null;
+        if (slide.type === 'open-question' && !String(slide.content?.expectedAnswer || '').trim()) return null;
         const responses = students
           .map((student: any) => getResponseForSlide(student, idx, slide))
           .filter((response: any) => response !== undefined && response !== null);
@@ -407,7 +427,8 @@ const ReportDetail = ({ user }: { user: User }) => {
 
     const questionStats = (report.data.slides || [])
       .map((slide: any, idx: number) => {
-        if (!['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) return null;
+        if (!['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization', 'open-question'].includes(slide.type)) return null;
+        if (slide.type === 'open-question' && !String(slide.content?.expectedAnswer || '').trim()) return null;
         const responses = sortedStudents.map((student: any) => getResponseForSlide(student, idx, slide)).filter((response: any) => response !== undefined && response !== null);
         const correctCount = responses.filter((response: any) => isResponseCorrectForSlide(slide, response)).length;
         const accuracy = responses.length ? (correctCount / responses.length) * 100 : 0;
@@ -653,7 +674,7 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
     try {
       const systemInstruction = `Вие сте експерт по образование. Генерирайте JSON обект за нова презентация на български език.
       Формат: { "title": "...", "slides": [{ "type": "...", "content": { "title": "...", "body": "...", "options": [...], "imageUrl": "...", "hotspot": {...}, "labels": [...] } }] }
-      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
+      Налични типове слайдове: title, text-image, quiz-single, quiz-multi, open-question, free-response, boolean, hotspot, labeling, matching, ordering, categorization.
       Генерирайте между 5 и 10 слайда. Смесете информация с интерактивни въпроси.`;
 
       const userPrompt = `Създай цялостна презентация въз основа на следното:
@@ -1003,14 +1024,14 @@ const Editor = ({ user }: { user: User }) => {
         { type: 'categorization', label: 'Категоризиране', icon: Layout, color: 'bg-lime-500' },
         { type: 'hotspot', label: 'Посочване (Област)', icon: MapPin, color: 'bg-violet-400' },
         { type: 'labeling', label: 'Етикети', icon: Move, color: 'bg-teal-400' },
-        { type: 'open-question', label: 'Отворен', icon: MessageSquare, color: 'bg-fuchsia-400' },
+        { type: 'open-question', label: 'Кратък отговор', icon: MessageSquare, color: 'bg-fuchsia-400' },
       ]
     },
     {
       title: 'Обратна връзка',
       items: [
         { type: 'whiteboard', label: 'Рисуване', icon: Palette, color: 'bg-orange-500' },
-        { type: 'open-question', label: 'Въпрос със свободен отговор', icon: Type, color: 'bg-orange-400' },
+        { type: 'free-response', label: 'Свободен отговор', icon: Type, color: 'bg-orange-400' },
       ]
     }
   ];
@@ -1048,11 +1069,11 @@ const Editor = ({ user }: { user: User }) => {
     try {
       const systemInstruction = mode === 'full' 
         ? `Вие сте експерт по образование. Генерирайте JSON масив от 5 до 8 интерактивни слайда на български език за цялостен урок.
-          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, free-response, boolean, hotspot, labeling, matching, ordering, categorization.
           Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
           Важно: Създайте логическа последователност от информация и въпроси.`
         : `Вие сте експерт по образование. Генерирайте JSON масив от точно 1 интерактивен слайд на български език.
-          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, boolean, hotspot, labeling, matching, ordering, categorization.
+          Налични типове: title, text-image, quiz-single, quiz-multi, open-question, free-response, boolean, hotspot, labeling, matching, ordering, categorization.
           Формат: [{ "type": "...", "content": { "title": "...", "body": "...", "options": [{ "text": "...", "isCorrect": boolean }], "imageUrl": "...", "hotspot": { "x": 50, "y": 50, "radius": 10 }, "labels": [{ "id": "...", "text": "...", "x": 50, "y": 50 }] } }]
           Важно: Създайте съдържание, което точно отговаря на инструкцията.`;
 
@@ -1183,6 +1204,8 @@ const Editor = ({ user }: { user: User }) => {
           { id: nanoid(), text: 'Елемент 2', category: 'Категория 2' }
         ] : undefined,
         hotspot: type === 'hotspot' ? { x: 50, y: 50, radius: 10 } : undefined,
+        placeholder: (type === 'open-question' || type === 'free-response') ? 'Напишете тук...' : undefined,
+        expectedAnswer: type === 'open-question' ? '' : undefined,
         imageUrl: (type === 'text-image' || type === 'labeling' || type === 'hotspot' || type === 'whiteboard') ? '' : undefined,
         videoUrl: type === 'video' ? '' : undefined,
       }
@@ -1952,7 +1975,25 @@ const Editor = ({ user }: { user: User }) => {
 
                 {activeSlide.type === 'open-question' && (
                   <div className="flex flex-col gap-4">
-                    <p className="text-gray-400 italic">Учениците ще могат да пишат свободен текст като отговор.</p>
+                    <p className="text-gray-400 italic">Кратък отговор: въвеждаш очакван отговор и системата сравнява автоматично.</p>
+                    <input 
+                      className="w-full p-3 border border-gray-200 rounded-xl"
+                      placeholder="Очакван отговор (може и няколко на нов ред)..."
+                      value={activeSlide.content.expectedAnswer || ''}
+                      onChange={e => updateContent({ expectedAnswer: e.target.value })}
+                    />
+                    <input 
+                      className="w-full p-3 border border-gray-200 rounded-xl"
+                      placeholder="Подсказка (Placeholder)..."
+                      value={activeSlide.content.placeholder || ''}
+                      onChange={e => updateContent({ placeholder: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                {activeSlide.type === 'free-response' && (
+                  <div className="flex flex-col gap-4">
+                    <p className="text-gray-400 italic">Свободен отговор: учениците пишат творчески текст без автоматично точкуване.</p>
                     <input 
                       className="w-full p-3 border border-gray-200 rounded-xl"
                       placeholder="Подсказка (Placeholder)..."
@@ -2180,7 +2221,7 @@ const Editor = ({ user }: { user: User }) => {
                 )}
 
                 {/* Timer Settings */}
-                {['quiz-single', 'quiz-multi', 'open-question', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching', 'ordering', 'categorization'].includes(activeSlide.type) && (
+                {['quiz-single', 'quiz-multi', 'open-question', 'free-response', 'labeling', 'whiteboard', 'boolean', 'hotspot', 'matching', 'ordering', 'categorization'].includes(activeSlide.type) && (
                   <div className="mt-12 pt-8 border-t border-gray-100">
                     <label className="block text-xs font-bold text-gray-400 uppercase mb-4">Настройки на времето</label>
                     <div className="flex items-center gap-4">
@@ -3063,7 +3104,7 @@ const HostView = ({ user }: { user: User }) => {
               </div>
             )}
 
-            {currentSlide.type === 'open-question' && (
+            {(currentSlide.type === 'open-question' || currentSlide.type === 'free-response') && (
               <div className="w-full grid grid-cols-2 gap-4 overflow-y-auto max-h-[400px] p-4">
                 <AnimatePresence>
                   {Object.entries(responses).map(([sid, resp]) => (
@@ -3176,7 +3217,7 @@ const StudentView = () => {
   const [openAnswer, setOpenAnswer] = useState('');
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const [feedback, setFeedback] = useState<{ isCorrect: boolean, pointsEarned: number, totalScore: number } | null>(null);
+  const [feedback, setFeedback] = useState<{ isCorrect: boolean | null, pointsEarned: number, totalScore: number, message?: string } | null>(null);
   const [finalLeaderboard, setFinalLeaderboard] = useState<any[] | null>(null);
   const [finalScore, setFinalScore] = useState<number | null>(null);
   const [showStudentLeaderboard, setShowStudentLeaderboard] = useState(false);
@@ -3234,6 +3275,7 @@ const StudentView = () => {
             setMultiResponses([]);
             setMatchingConnections({});
             setSelectedLeft(null);
+            setOpenAnswer('');
             setStatus('active');
           } else {
             setStatus('waiting');
@@ -3250,7 +3292,8 @@ const StudentView = () => {
           setFeedback({
             isCorrect: msg.isCorrect,
             pointsEarned: msg.pointsEarned,
-            totalScore: msg.totalScore
+            totalScore: msg.totalScore,
+            message: msg.message
           });
           break;
         case 'PRESENTATION_FINISHED':
@@ -3525,8 +3568,11 @@ const StudentView = () => {
               )}
             </div>
           </div>
-        ) : currentSlide.type === 'open-question' ? (
+        ) : (currentSlide.type === 'open-question' || currentSlide.type === 'free-response') ? (
           <div className="flex-1 flex flex-col gap-4">
+            <p className="text-center text-gray-500 font-medium">
+              {currentSlide.type === 'open-question' ? 'Кратък отговор' : 'Свободен отговор'}
+            </p>
             <textarea 
               disabled={submitted}
               className="flex-1 p-6 text-xl border-2 border-gray-200 rounded-3xl focus:border-indigo-500 focus:ring-0 resize-none"
@@ -3894,7 +3940,17 @@ const StudentView = () => {
             >
               {feedback ? (
                 <>
-                  {feedback.isCorrect ? (
+                  {feedback.isCorrect === null ? (
+                    <>
+                      <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
+                        <CheckCircle2 className="w-12 h-12" />
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-black text-indigo-600">Отговорът е приет</h3>
+                        <p className="text-gray-500 font-bold">{feedback.message || 'Без автоматично точкуване за този екран.'}</p>
+                      </div>
+                    </>
+                  ) : feedback.isCorrect ? (
                     <>
                       <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center text-green-600">
                         <CheckCircle2 className="w-12 h-12" />

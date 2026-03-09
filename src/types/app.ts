@@ -8,6 +8,7 @@ export type SlideType =
   | 'labeling'
   | 'hotspot'
   | 'open-question'
+  | 'free-response'
   | 'whiteboard'
   | 'matching'
   | 'ordering'
@@ -56,6 +57,7 @@ export interface Slide {
     bodyColor?: string;
     imageScale?: number;
     layout?: 'left' | 'right' | 'top' | 'bottom' | 'full';
+    expectedAnswer?: string;
   };
 }
 

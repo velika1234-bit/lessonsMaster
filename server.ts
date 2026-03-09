@@ -30,6 +30,8 @@ const verifyToken = (token: string): { userId: string } | null => {
   }
 };
 
+const normalizeAnswerText = (value: string) => value.toLowerCase().trim().replace(/\s+/g, " ");
+
 // Middleware to verify JWT from Authorization header
 const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const authHeader = req.headers.authorization;
@@ -792,6 +794,7 @@ wss.on("connection", (ws) => {
                 const content = JSON.parse(currentSlide.content);
                 const slidePoints = currentSlide.points ?? 1;
                 let isCorrect = false;
+                let isGraded = true;
 
                 if (currentSlide.type === 'quiz-single' || currentSlide.type === 'boolean') {
                   const correctIdx = content.options.findIndex((o: any) => o.isCorrect);
@@ -852,9 +855,25 @@ wss.on("connection", (ws) => {
                   if (items.length > 0) {
                     isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
                   }
+                } else if (currentSlide.type === 'open-question') {
+                  const expectedRaw = String(content.expectedAnswer || '').trim();
+                  const learnerRaw = typeof message.response === 'string' ? message.response : String(message.response || '');
+
+                  if (!expectedRaw) {
+                    isGraded = false;
+                  } else {
+                    const expectedAnswers = expectedRaw
+                      .split(/\r?\n|\|/)
+                      .map((answer: string) => normalizeAnswerText(answer))
+                      .filter(Boolean);
+                    const learnerAnswer = normalizeAnswerText(learnerRaw);
+                    isCorrect = learnerAnswer.length > 0 && expectedAnswers.includes(learnerAnswer);
+                  }
+                } else if (currentSlide.type === 'free-response' || currentSlide.type === 'whiteboard') {
+                  isGraded = false;
                 }
 
-                if (isCorrect) {
+                if (isGraded && isCorrect) {
                   student.score += slidePoints;
                 }
 
@@ -862,9 +881,10 @@ wss.on("connection", (ws) => {
                 if (ws.readyState === WebSocket.OPEN) {
                   ws.send(JSON.stringify({
                     type: "FEEDBACK",
-                    isCorrect,
-                    pointsEarned: isCorrect ? slidePoints : 0,
-                    totalScore: student.score
+                    isCorrect: isGraded ? isCorrect : null,
+                    pointsEarned: (isGraded && isCorrect) ? slidePoints : 0,
+                    totalScore: student.score,
+                    message: isGraded ? undefined : "Този отговор е без автоматично точкуване."
                   }));
                 }
               }
