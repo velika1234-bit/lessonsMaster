@@ -130,7 +130,6 @@ const getAIInstance = () => {
 
 // --- Components ---
 
-
 const isResponseCorrectForSlide = (slide: any, response: any) => {
   if (response === undefined || response === null) return false;
 
@@ -591,6 +590,7 @@ const ReportDetail = ({ user }: { user: User }) => {
               <div className="flex justify-between items-center gap-3 mb-2">
                 <div className="font-semibold text-gray-800">#{slide.index + 1} • {slide.title}</div>
                 <div className="text-sm font-bold text-indigo-600">{slide.accuracy.toFixed(1)}%</div>
+              
               </div>
               <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden mb-2">
                 <div className="h-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, slide.accuracy))}%` }} />
@@ -3161,15 +3161,24 @@ const HostView = ({ user }: { user: User }) => {
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[280px] overflow-y-auto">
                   {Object.entries(responses)
                     .filter(([, resp]) => typeof resp === 'string' && resp.startsWith('data:image/'))
-                    .map(([sid, resp], index) => (
-                      <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
-                        <img
-                          src={resp as string}
-                          alt={`Рисунка ${index + 1}`}
-                          className="w-full aspect-square object-cover rounded-lg border border-gray-100"
-                        />
-                      </div>
-                    ))}
+                    .map(([sid, resp], index) => {
+                      const studentName = students.find((s) => s.id === sid)?.name || `Ученик ${index + 1}`;
+                      return (
+                        <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
+                          <img
+                            src={resp as string}
+                            alt={`Рисунка от ${studentName}`}
+                            className="w-full aspect-square object-cover rounded-lg border border-gray-100"
+                          />
+                          <p className="mt-2 text-xs font-semibold text-gray-600 truncate" title={studentName}>{studentName}</p>
+                        </div>
+                      );
+                    })}
+                  {Object.values(responses).filter((resp) => typeof resp === 'string' && resp.startsWith('data:image/')).length === 0 && (
+                    <div className="col-span-full text-center py-6 text-gray-400 font-medium">
+                      Все още няма изпратени рисунки.
+                    </div>
+                  )}
                 </div>
               </div>
             )}
