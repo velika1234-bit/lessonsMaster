@@ -130,6 +130,7 @@ const getAIInstance = () => {
 
 // --- Components ---
 
+
 const isResponseCorrectForSlide = (slide: any, response: any) => {
   if (response === undefined || response === null) return false;
 
@@ -3739,24 +3740,41 @@ const StudentView = () => {
                   const exportCtx = exportCanvas.getContext('2d');
                   if (!exportCtx) return;
 
+                  const submitCanvasAsImage = (sourceCanvas: HTMLCanvasElement) => {
+                    try {
+                      submitResponse(sourceCanvas.toDataURL('image/png'));
+                    } catch (err) {
+                      console.error('Whiteboard export failed', err);
+                      if (sourceCanvas !== canvas) {
+                        try {
+                          submitResponse(canvas.toDataURL('image/png'));
+                          return;
+                        } catch (fallbackErr) {
+                          console.error('Whiteboard fallback export failed', fallbackErr);
+                        }
+                      }
+                      alert('Не успяхме да изпратим рисунката. Опитайте отново.');
+                    }
+                  };
+
                   if (currentSlide.content.imageUrl) {
                     const bg = new Image();
                     bg.crossOrigin = 'anonymous';
                     bg.onload = () => {
                       exportCtx.drawImage(bg, 0, 0, exportCanvas.width, exportCanvas.height);
                       exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
-                      submitResponse(exportCanvas.toDataURL('image/png'));
+                      submitCanvasAsImage(exportCanvas);
                     };
                     bg.onerror = () => {
                       exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
-                      submitResponse(exportCanvas.toDataURL('image/png'));
+                      submitCanvasAsImage(exportCanvas);
                     };
                     bg.src = currentSlide.content.imageUrl;
                     return;
                   }
 
                   exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
-                  submitResponse(exportCanvas.toDataURL('image/png'));
+                  submitCanvasAsImage(exportCanvas);
                 }}
               >
                 Изпрати рисунката
