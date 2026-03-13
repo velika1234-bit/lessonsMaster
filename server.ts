@@ -177,7 +177,58 @@ const rooms = new Map<string, {
     responses: Record<number, any>;
     score: number;
   }>;
+  liveActivity: null | {
+    id: string;
+    type: 'poll' | 'wordcloud';
+    question: string;
+    options?: string[];
+    responses: Record<string, string>;
+  };
 }>();
+
+const buildLiveActivityPayload = (activity: null | {
+  id: string;
+  type: 'poll' | 'wordcloud';
+  question: string;
+  options?: string[];
+  responses: Record<string, string>;
+}) => {
+  if (!activity) return null;
+
+  if (activity.type === 'poll') {
+    const options = activity.options || [];
+    const counts = options.map((option) => ({
+      option,
+      count: Object.values(activity.responses).filter((value) => value === option).length
+    }));
+    return {
+      id: activity.id,
+      type: activity.type,
+      question: activity.question,
+      options,
+      counts,
+      totalResponses: Object.keys(activity.responses).length
+    };
+  }
+
+  const words = Object.values(activity.responses)
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  const countsMap: Record<string, number> = {};
+  for (const word of words) countsMap[word] = (countsMap[word] || 0) + 1;
+  const wordsCloud = Object.entries(countsMap)
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 40);
+
+  return {
+    id: activity.id,
+    type: activity.type,
+    question: activity.question,
+    words: wordsCloud,
+    totalResponses: Object.keys(activity.responses).length
+  };
+};
 
 // Map presentationId to active PIN to allow reconnection
 const presentationToPin = new Map<string, string>();
@@ -602,7 +653,9 @@ wss.on("connection", (ws) => {
               currentSlideIndex: -1,
               privacyMode: false,
               slides: loadSlidesForPresentation(message.presentationId),
-              students: new Map()
+              students: new Map(),
+              liveActivity: null
+              
             });
           }
           
@@ -626,7 +679,8 @@ wss.on("connection", (ws) => {
               ...currentSlide,
               content: JSON.parse(currentSlide.content)
             } : null,
-            currentSlideIndex: room.currentSlideIndex
+            currentSlideIndex: room.currentSlideIndex,
+            liveActivity: buildLiveActivityPayload(room.liveActivity)
           }));
           break;
         }
@@ -669,6 +723,18 @@ wss.on("connection", (ws) => {
                 ? { ...currentSlide, content: JSON.parse(currentSlide.content) }
                 : null
             }));
+
+            if (room.liveActivity && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "LIVE_ACTIVITY_START",
+                activity: {
+                  id: room.liveActivity.id,
+                  type: room.liveActivity.type,
+                  question: room.liveActivity.question,
+                  options: room.liveActivity.options || []
+                }
+              }));
+            }
           } else {
             ws.send(JSON.stringify({ type: "ERROR", message: "Invalid PIN" }));
           }
@@ -776,6 +842,98 @@ wss.on("connection", (ws) => {
                 }));
               }
             });
+          }
+          break;
+        }
+
+        case "HOST_START_ACTIVITY": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || room.host !== ws) break;
+
+          const activityType = message.activityType === 'poll' ? 'poll' : 'wordcloud';
+          const question = String(message.question || '').trim();
+          if (!question) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: 'Въведете въпрос за live активността.' }));
+            break;
+          }
+
+          const options = activityType === 'poll'
+            ? (Array.isArray(message.options) ? message.options : [])
+                .map((value: any) => String(value || '').trim())
+                .filter(Boolean)
+                .slice(0, 8)
+            : undefined;
+
+          if (activityType === 'poll' && (!options || options.length < 2)) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: 'Анкетата изисква поне 2 опции.' }));
+            break;
+          }
+
+          room.liveActivity = {
+            id: nanoid(8),
+            type: activityType,
+            question,
+            options,
+            responses: {}
+          };
+
+          const hostUpdate = buildLiveActivityPayload(room.liveActivity);
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_UPDATE', activity: hostUpdate }));
+          }
+          room.students.forEach((student) => {
+            if (student.ws.readyState === WebSocket.OPEN) {
+              student.ws.send(JSON.stringify({
+                type: 'LIVE_ACTIVITY_START',
+                activity: {
+                  id: room.liveActivity?.id,
+                  type: room.liveActivity?.type,
+                  question: room.liveActivity?.question,
+                  options: room.liveActivity?.options || []
+                }
+              }));
+            }
+          });
+          break;
+        }
+
+        case "HOST_END_ACTIVITY": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || room.host !== ws) break;
+          room.liveActivity = null;
+
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_END' }));
+          }
+          room.students.forEach((student) => {
+            if (student.ws.readyState === WebSocket.OPEN) {
+              student.ws.send(JSON.stringify({ type: 'LIVE_ACTIVITY_END' }));
+            }
+          });
+          break;
+        }
+
+        case "STUDENT_ACTIVITY_RESPONSE": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || !studentId || !room.liveActivity) break;
+          const student = room.students.get(studentId);
+          if (!student) break;
+
+          const normalizedResponse = String(message.response || '').trim();
+          if (!normalizedResponse) break;
+
+          room.liveActivity.responses[studentId] = normalizedResponse;
+
+          if (student.ws.readyState === WebSocket.OPEN) {
+            student.ws.send(JSON.stringify({ type: 'LIVE_ACTIVITY_ACK' }));
+          }
+
+          const hostUpdate = buildLiveActivityPayload(room.liveActivity);
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_UPDATE', activity: hostUpdate }));
           }
           break;
         }

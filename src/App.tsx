@@ -605,6 +605,24 @@ const ReportDetail = ({ user }: { user: User }) => {
   );
 };
 
+
+type LiveActivityHost = {
+  id: string;
+  type: 'poll' | 'wordcloud';
+  question: string;
+  options?: string[];
+  counts?: { option: string; count: number }[];
+  words?: { word: string; count: number }[];
+  totalResponses: number;
+};
+
+type LiveActivityStudent = {
+  id: string;
+  type: 'poll' | 'wordcloud';
+  question: string;
+  options?: string[];
+};
+
 const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => {
   const [presentations, setPresentations] = useState<Presentation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2300,6 +2318,11 @@ const HostView = ({ user }: { user: User }) => {
   const [isDownloadingReport, setIsDownloadingReport] = useState(false);
   const [isReportSaved, setIsReportSaved] = useState(false);
   const [hostOrderingPreview, setHostOrderingPreview] = useState<{ id: string; text: string }[]>([]);
+  const [liveActivity, setLiveActivity] = useState<LiveActivityHost | null>(null);
+  const [showLiveComposer, setShowLiveComposer] = useState(false);
+  const [liveActivityType, setLiveActivityType] = useState<'poll' | 'wordcloud'>('poll');
+  const [liveQuestion, setLiveQuestion] = useState('');
+  const [liveOptionsText, setLiveOptionsText] = useState('Да\nНе');
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
@@ -2390,6 +2413,7 @@ const HostView = ({ user }: { user: User }) => {
           setPin(msg.pin);
           if (msg.students) setStudents(msg.students);
           if (msg.currentSlide) setCurrentSlide(msg.currentSlide);
+          setLiveActivity(msg.liveActivity || null);
           break;
         case 'STUDENT_JOINED':
           setStudents(prev => [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }]);
@@ -2413,6 +2437,12 @@ const HostView = ({ user }: { user: User }) => {
         case 'RESPONSE_RECEIVED':
           setResponses(prev => ({ ...prev, [msg.id]: msg.response }));
           if (msg.leaderboard) setLeaderboard(msg.leaderboard);
+          break;
+        case 'LIVE_ACTIVITY_UPDATE':
+          setLiveActivity(msg.activity || null);
+          break;
+        case 'LIVE_ACTIVITY_END':
+          setLiveActivity(null);
           break;
         case 'PRESENTATION_FINISHED':
           setLeaderboard(msg.leaderboard);
@@ -2657,6 +2687,43 @@ const HostView = ({ user }: { user: User }) => {
   };
 
   // Lobby or Finished
+
+  const startLiveActivity = () => {
+    if (!pin || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    const question = liveQuestion.trim();
+    if (!question) {
+      alert('Въведете въпрос за live активността.');
+      return;
+    }
+
+    const options = liveActivityType === 'poll'
+      ? liveOptionsText
+          .split(/\r?\n/)
+          .map((option) => option.trim())
+          .filter(Boolean)
+      : [];
+
+    if (liveActivityType === 'poll' && options.length < 2) {
+      alert('Анкетата изисква поне 2 опции.');
+      return;
+    }
+
+    ws.current.send(JSON.stringify({
+      type: 'HOST_START_ACTIVITY',
+      pin,
+      activityType: liveActivityType,
+      question,
+      options
+    }));
+    setShowLiveComposer(false);
+  };
+
+  const endLiveActivity = () => {
+    if (!pin || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: 'HOST_END_ACTIVITY', pin }));
+    setLiveActivity(null);
+  };
+
   if (!currentSlide) {
     const joinUrl = `${window.location.origin}/join?pin=${pin}`;
     
@@ -2699,6 +2766,7 @@ const HostView = ({ user }: { user: User }) => {
                 </div>
                 <Button className="h-16 text-xl" onClick={downloadReport} disabled={isDownloadingReport}>
                   <Download className="w-6 h-6" /> {isDownloadingReport ? 'Генериране...' : 'Изтегли PDF Отчет'}
+               
                 </Button>
                 <Button variant="secondary" className="h-16 text-xl" onClick={finishSession} disabled={isSavingReport}>
                   {isSavingReport ? 'Запазване...' : isReportSaved ? 'Към Доклади' : 'Запази в Доклади'}
@@ -2823,6 +2891,20 @@ const HostView = ({ user }: { user: User }) => {
           }}>
             <Users className="w-4 h-4" /> Класация
           </Button>
+          {!liveActivity ? (
+            <>
+              <Button variant="secondary" onClick={() => { setLiveActivityType('poll'); setShowLiveComposer(true); }}>
+                <BarChart3 className="w-4 h-4" /> Анкета Live
+              </Button>
+              <Button variant="secondary" onClick={() => { setLiveActivityType('wordcloud'); setShowLiveComposer(true); }}>
+                <MessageSquare className="w-4 h-4" /> Облак от думи
+              </Button>
+            </>
+          ) : (
+            <Button variant="danger" onClick={endLiveActivity}>
+              <X className="w-4 h-4" /> Спри Live активност
+            </Button>
+          )}
           <Button variant="secondary" onClick={downloadReport}>
             <Download className="w-4 h-4" /> PDF Отчет
           </Button>
@@ -2848,6 +2930,73 @@ const HostView = ({ user }: { user: User }) => {
             style={{ backgroundImage: `url(${presentationData.globalBackgroundImage})`, backgroundSize: 'cover' }}
           />
         )}
+        {showLiveComposer && (
+          <div className="absolute inset-0 z-30 bg-black/40 flex items-center justify-center p-6">
+            <Card className="w-full max-w-xl p-6 space-y-4">
+              <h3 className="text-xl font-black text-gray-900">
+                {liveActivityType === 'poll' ? 'Стартирай live анкета' : 'Стартирай live облак от думи'}
+              </h3>
+              <input
+                className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:border-indigo-500 focus:ring-0"
+                placeholder="Въпрос към учениците"
+                value={liveQuestion}
+                onChange={(e) => setLiveQuestion(e.target.value)}
+              />
+              {liveActivityType === 'poll' && (
+                <textarea
+                  className="w-full min-h-[120px] border-2 border-gray-200 rounded-xl px-4 py-3 focus:border-indigo-500 focus:ring-0"
+                  placeholder="Опции, по една на ред"
+                  value={liveOptionsText}
+                  onChange={(e) => setLiveOptionsText(e.target.value)}
+                />
+              )}
+              <div className="flex justify-end gap-3">
+                <Button variant="secondary" onClick={() => setShowLiveComposer(false)}>Отказ</Button>
+                <Button onClick={startLiveActivity}>Пусни</Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {liveActivity && (
+          <div className="absolute left-12 top-12 z-20 w-[420px] max-w-[45vw]">
+            <Card className="p-5 space-y-4 shadow-xl border border-indigo-100 bg-white/95 backdrop-blur">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-widest text-indigo-500">Live активност</span>
+                <span className="text-sm font-bold text-gray-500">{liveActivity.totalResponses} отговора</span>
+              </div>
+              <h4 className="text-lg font-black text-gray-900">{liveActivity.question}</h4>
+              {liveActivity.type === 'poll' ? (
+                <div className="space-y-2">
+                  {(liveActivity.counts || []).map((item) => {
+                    const maxCount = Math.max(1, ...(liveActivity.counts || []).map((x) => x.count));
+                    const width = (item.count / maxCount) * 100;
+                    return (
+                      <div key={item.option}>
+                        <div className="flex items-center justify-between text-sm font-semibold text-gray-700 mb-1">
+                          <span>{item.option}</span>
+                          <span>{item.count}</span>
+                        </div>
+                        <div className="w-full h-2 rounded-full bg-gray-100 overflow-hidden">
+                          <div className="h-full bg-indigo-500" style={{ width: `${width}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {(liveActivity.words || []).map((item) => (
+                    <span key={item.word} className="px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 font-bold" style={{ fontSize: `${12 + Math.min(item.count, 6) * 3}px` }}>
+                      {item.word}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
         {showLeaderboard && (
           <motion.div 
             initial={{ x: 300, opacity: 0 }}
@@ -3341,6 +3490,19 @@ const StudentView = () => {
             message: msg.message
           });
           break;
+        case 'LIVE_ACTIVITY_START':
+          setLiveActivity(msg.activity || null);
+          setLiveActivityResponse('');
+          setLiveActivitySubmitted(false);
+          break;
+        case 'LIVE_ACTIVITY_END':
+          setLiveActivity(null);
+          setLiveActivityResponse('');
+          setLiveActivitySubmitted(false);
+          break;
+        case 'LIVE_ACTIVITY_ACK':
+          setLiveActivitySubmitted(true);
+          break;
         case 'PRESENTATION_FINISHED':
           setFinalLeaderboard(msg.leaderboard);
           setFinalScore(msg.yourScore);
@@ -3364,10 +3526,22 @@ const StudentView = () => {
   const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
   const [whiteboardColor, setWhiteboardColor] = useState('#4f46e5');
   const [whiteboardLineWidth, setWhiteboardLineWidth] = useState(3);
+  const [liveActivity, setLiveActivity] = useState<LiveActivityStudent | null>(null);
+  const [liveActivityResponse, setLiveActivityResponse] = useState('');
+  const [liveActivitySubmitted, setLiveActivitySubmitted] = useState(false);
 
   const submitResponse = (response: any) => {
     ws.current?.send(JSON.stringify({ type: 'SUBMIT_RESPONSE', response }));
     setSubmitted(true);
+  };
+
+  const submitLiveActivityResponse = (response: string) => {
+    if (!liveActivity || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    const normalized = response.trim();
+    if (!normalized) return;
+    ws.current.send(JSON.stringify({ type: 'STUDENT_ACTIVITY_RESPONSE', response: normalized }));
+    setLiveActivityResponse(normalized);
+    setLiveActivitySubmitted(true);
   };
 
   const toggleMulti = (idx: number) => {
@@ -3497,6 +3671,49 @@ const StudentView = () => {
             className="absolute inset-0 opacity-15 pointer-events-none"
             style={{ backgroundImage: `url(${presentationData.globalBackgroundImage})`, backgroundSize: 'cover' }}
           />
+        )}
+
+        {liveActivity && (
+          <div className="mb-4 relative z-20">
+            <Card className="p-4 border-indigo-100 bg-indigo-50/80">
+              <div className="text-xs font-bold text-indigo-500 uppercase tracking-widest mb-2">Live активност</div>
+              <p className="text-sm font-bold text-gray-900 mb-3">{liveActivity.question}</p>
+              {liveActivity.type === 'poll' ? (
+                <div className="flex flex-wrap gap-2">
+                  {(liveActivity.options || []).map((option) => (
+                    <button
+                      key={option}
+                      disabled={liveActivitySubmitted}
+                      onClick={() => submitLiveActivityResponse(option)}
+                      className={`px-3 py-2 rounded-xl border-2 text-sm font-bold ${liveActivityResponse === option ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-indigo-200 bg-white text-indigo-700'} ${liveActivitySubmitted ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <input
+                    className="flex-1 border-2 border-indigo-200 rounded-xl px-3 py-2 text-sm focus:border-indigo-500 focus:ring-0"
+                    placeholder="Напиши дума"
+                    value={liveActivityResponse}
+                    disabled={liveActivitySubmitted}
+                    onChange={(e) => setLiveActivityResponse(e.target.value)}
+                  />
+                  <Button
+                    className="px-4 py-2"
+                    disabled={liveActivitySubmitted || !liveActivityResponse.trim()}
+                    onClick={() => submitLiveActivityResponse(liveActivityResponse)}
+                  >
+                    Изпрати
+                  </Button>
+                </div>
+              )}
+              {liveActivitySubmitted && (
+                <p className="text-xs font-semibold text-emerald-600 mt-2">Отговорът е изпратен.</p>
+              )}
+            </Card>
+          </div>
         )}
 
         {showStudentLeaderboard ? (
@@ -3742,12 +3959,12 @@ const StudentView = () => {
 
                   const submitCanvasAsImage = (sourceCanvas: HTMLCanvasElement) => {
                     try {
-                      submitResponse(sourceCanvas.toDataURL('image/png'));
+                      submitResponse(sourceCanvas.toDataURL('image/jpeg', 0.9));
                     } catch (err) {
                       console.error('Whiteboard export failed', err);
                       if (sourceCanvas !== canvas) {
                         try {
-                          submitResponse(canvas.toDataURL('image/png'));
+                          submitResponse(canvas.toDataURL('image/jpeg', 0.9));
                           return;
                         } catch (fallbackErr) {
                           console.error('Whiteboard fallback export failed', fallbackErr);
