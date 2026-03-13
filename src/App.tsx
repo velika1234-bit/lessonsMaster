@@ -591,6 +591,7 @@ const ReportDetail = ({ user }: { user: User }) => {
               <div className="flex justify-between items-center gap-3 mb-2">
                 <div className="font-semibold text-gray-800">#{slide.index + 1} • {slide.title}</div>
                 <div className="text-sm font-bold text-indigo-600">{slide.accuracy.toFixed(1)}%</div>
+              
               </div>
               <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden mb-2">
                 <div className="h-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, slide.accuracy))}%` }} />
@@ -2633,6 +2634,8 @@ const HostView = ({ user }: { user: User }) => {
       };
     });
   }, [currentSlide, responses]);
+
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
 
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
