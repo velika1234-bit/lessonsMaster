@@ -3146,16 +3146,30 @@ const HostView = ({ user }: { user: User }) => {
               </div>
             )}
             {currentSlide.type === 'whiteboard' && (
-              <div className="w-full flex-1 flex flex-col items-center justify-center">
+              <div className="w-full flex-1 flex flex-col gap-4">
                 <div className="relative w-full aspect-video bg-white rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden">
                   {currentSlide.content.imageUrl && (
                     <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-20" alt="BG" />
                   )}
-                  <div className="text-center text-gray-400">
+                  <div className="text-center text-gray-400 z-10">
                     <Edit2 className="w-12 h-12 mx-auto mb-4 opacity-20" />
                     <p>Учениците рисуват в момента...</p>
                     <p className="text-sm mt-2">{Object.keys(responses).length} изпратени рисунки</p>
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[280px] overflow-y-auto">
+                  {Object.entries(responses)
+                    .filter(([, resp]) => typeof resp === 'string' && resp.startsWith('data:image/'))
+                    .map(([sid, resp], index) => (
+                      <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
+                        <img
+                          src={resp as string}
+                          alt={`Рисунка ${index + 1}`}
+                          className="w-full aspect-square object-cover rounded-lg border border-gray-100"
+                        />
+                      </div>
+                    ))}
                 </div>
               </div>
             )}
@@ -3705,7 +3719,37 @@ const StudentView = () => {
               />
             </div>
             {!submitted && (
-              <Button className="h-16 text-xl" onClick={() => submitResponse('drawn')}>
+              <Button
+                className="h-16 text-xl"
+                onClick={() => {
+                  const canvas = whiteboardCanvasRef.current;
+                  if (!canvas) return;
+                  const exportCanvas = document.createElement('canvas');
+                  exportCanvas.width = canvas.width || canvas.clientWidth;
+                  exportCanvas.height = canvas.height || canvas.clientHeight;
+                  const exportCtx = exportCanvas.getContext('2d');
+                  if (!exportCtx) return;
+
+                  if (currentSlide.content.imageUrl) {
+                    const bg = new Image();
+                    bg.crossOrigin = 'anonymous';
+                    bg.onload = () => {
+                      exportCtx.drawImage(bg, 0, 0, exportCanvas.width, exportCanvas.height);
+                      exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+                      submitResponse(exportCanvas.toDataURL('image/png'));
+                    };
+                    bg.onerror = () => {
+                      exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+                      submitResponse(exportCanvas.toDataURL('image/png'));
+                    };
+                    bg.src = currentSlide.content.imageUrl;
+                    return;
+                  }
+
+                  exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
+                  submitResponse(exportCanvas.toDataURL('image/png'));
+                }}
+              >
                 Изпрати рисунката
               </Button>
             )}
