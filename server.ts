@@ -947,6 +947,7 @@ app.get("/api/sessions/:pin/report", (req, res) => {
 
   const presentation = db.prepare("SELECT * FROM presentations WHERE id = ?").get(room.presentationId);
   const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+  const ephemeralOnlySlides = new Set(["whiteboard"]);
 
   const reportData = {
     presentationTitle: presentation.title,
@@ -954,7 +955,14 @@ app.get("/api/sessions/:pin/report", (req, res) => {
     students: Array.from(room.students.values()).map(s => ({
       name: s.name,
       score: s.score,
-      responses: s.responses
+      responses: Object.fromEntries(
+        Object.entries(s.responses).filter(([slideIndex]) => {
+          const idx = Number(slideIndex);
+          const slide = slides[idx];
+          if (!slide) return true;
+          return !ephemeralOnlySlides.has(slide.type);
+        })
+      )
     })),
     slides: slides.map(s => ({
       type: s.type,

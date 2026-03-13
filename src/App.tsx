@@ -2003,6 +2003,26 @@ const Editor = ({ user }: { user: User }) => {
                   </div>
                 )}
 
+                {activeSlide.type === 'whiteboard' && (
+                  <div className="flex flex-col gap-4">
+                    <p className="text-gray-400 italic">Бяла дъска: учениците рисуват свободно. Рисунките са временни (само за сесията).</p>
+                    <input
+                      className="w-full p-3 border border-gray-200 rounded-xl"
+                      placeholder="URL на фоново изображение (по избор)..."
+                      value={activeSlide.content.imageUrl || ''}
+                      onChange={e => updateContent({ imageUrl: e.target.value })}
+                    />
+                    {activeSlide.content.imageUrl && (
+                      <div className="relative aspect-video bg-gray-100 rounded-xl overflow-hidden border border-gray-200">
+                        <img src={activeSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-50" alt="Whiteboard BG" />
+                        <div className="absolute inset-0 flex items-center justify-center text-xs font-bold text-gray-500 uppercase tracking-widest">
+                          Преглед на фона за рисуване
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {activeSlide.type === 'labeling' && (
                   <div className="flex flex-col gap-6">
                     <div className="p-4 bg-gray-50 rounded-xl border border-dashed border-gray-300">
@@ -3223,6 +3243,7 @@ const StudentView = () => {
   const [showStudentLeaderboard, setShowStudentLeaderboard] = useState(false);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
+  const whiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const navigate = useNavigate();
 
 
@@ -3317,6 +3338,8 @@ const StudentView = () => {
   const [draggedOrderingIndex, setDraggedOrderingIndex] = useState<number | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
+  const [whiteboardColor, setWhiteboardColor] = useState('#4f46e5');
+  const [whiteboardLineWidth, setWhiteboardLineWidth] = useState(3);
 
   const submitResponse = (response: any) => {
     ws.current?.send(JSON.stringify({ type: 'SUBMIT_RESPONSE', response }));
@@ -3592,11 +3615,58 @@ const StudentView = () => {
           </div>
         ) : currentSlide.type === 'whiteboard' ? (
           <div className="flex-1 flex flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white/80 border border-gray-200 rounded-2xl px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Цвят</span>
+                {['#4f46e5', '#ef4444', '#10b981', '#f59e0b', '#111827'].map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    disabled={submitted}
+                    onClick={() => setWhiteboardColor(color)}
+                    className={`w-7 h-7 rounded-full border-2 transition ${whiteboardColor === color ? 'border-gray-900 scale-110' : 'border-white shadow'}`}
+                    style={{ backgroundColor: color }}
+                    aria-label={`Избери цвят ${color}`}
+                  />
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 min-w-[180px]">
+                <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Дебелина</span>
+                <input
+                  type="range"
+                  min="1"
+                  max="12"
+                  value={whiteboardLineWidth}
+                  onChange={(e) => setWhiteboardLineWidth(parseInt(e.target.value))}
+                  disabled={submitted}
+                  className="flex-1 accent-indigo-600"
+                />
+                <span className="text-xs font-bold text-indigo-600 w-6 text-right">{whiteboardLineWidth}</span>
+              </div>
+
+              <Button
+                variant="secondary"
+                className="px-4 py-2"
+                disabled={submitted}
+                onClick={() => {
+                  const canvas = whiteboardCanvasRef.current;
+                  if (!canvas) return;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) return;
+                  ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }}
+              >
+                Изчисти
+              </Button>
+            </div>
+
             <div className="flex-1 bg-white rounded-3xl border-2 border-gray-200 relative overflow-hidden">
               {currentSlide.content.imageUrl && (
                 <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-30" alt="BG" />
               )}
               <canvas 
+                ref={whiteboardCanvasRef}
                 className="absolute inset-0 w-full h-full cursor-crosshair touch-none"
                 onPointerDown={(e) => {
                   const canvas = e.currentTarget;
@@ -3611,9 +3681,9 @@ const StudentView = () => {
                   }
 
                   ctx.beginPath();
-                  ctx.lineWidth = 3;
+                  ctx.lineWidth = whiteboardLineWidth;
                   ctx.lineCap = 'round';
-                  ctx.strokeStyle = '#4f46e5';
+                  ctx.strokeStyle = whiteboardColor;
                   ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
                   (canvas as any).isDrawing = true;
                 }}
@@ -3627,6 +3697,9 @@ const StudentView = () => {
                   ctx.stroke();
                 }}
                 onPointerUp={(e) => {
+                  (e.currentTarget as any).isDrawing = false;
+                }}
+                onPointerLeave={(e) => {
                   (e.currentTarget as any).isDrawing = false;
                 }}
               />
