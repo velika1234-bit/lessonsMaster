@@ -655,6 +655,7 @@ wss.on("connection", (ws) => {
               slides: loadSlidesForPresentation(message.presentationId),
               students: new Map(),
               liveActivity: null
+              
             });
           }
           
