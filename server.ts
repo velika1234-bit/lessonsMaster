@@ -171,7 +171,8 @@ const rooms = new Map<string, {
   privacyMode: boolean;
   slides: any[];
   students: Map<string, { 
-    ws: WebSocket; 
+    ws: WebSocket | null; 
+    connected: boolean;
     name: string; 
     avatarSeed: string;
     responses: Record<number, any>;
@@ -185,6 +186,9 @@ const rooms = new Map<string, {
     responses: Record<string, string>;
   };
 }>();
+
+const getConnectedStudentsCount = (room: { students: Map<string, { connected: boolean }> }) =>
+  Array.from(room.students.values()).filter((student) => student.connected).length;
 
 const buildLiveActivityPayload = (activity: null | {
   id: string;
@@ -655,7 +659,6 @@ wss.on("connection", (ws) => {
               slides: loadSlidesForPresentation(message.presentationId),
               students: new Map(),
               liveActivity: null
-              
             });
           }
           
@@ -670,11 +673,13 @@ wss.on("connection", (ws) => {
           ws.send(JSON.stringify({ 
             type: "ROOM_CREATED", 
             pin,
-            students: Array.from(room.students.entries()).map(([id, s]) => ({ 
-              id, 
-              name: s.name,
-              avatarSeed: s.avatarSeed
-            })),
+            students: Array.from(room.students.entries())
+              .filter(([, student]) => student.connected)
+              .map(([id, student]) => ({ 
+                id,
+                name: student.name,
+                avatarSeed: student.avatarSeed
+              })),
             currentSlide: currentSlide ? {
               ...currentSlide,
               content: JSON.parse(currentSlide.content)
@@ -688,15 +693,29 @@ wss.on("connection", (ws) => {
         case "JOIN_ROOM": {
           const room = rooms.get(message.pin);
           if (room) {
-            studentId = nanoid(5);
-            const avatarSeed = Math.random().toString(36).substring(7);
-            room.students.set(studentId, { ws, name: message.name, avatarSeed, responses: {}, score: 0 });
+            const normalizedName = String(message.name || '').trim();
+            const reconnectEntry = normalizedName
+              ? Array.from(room.students.entries()).find(([, student]) => !student.connected && student.name === normalizedName)
+              : null;
+
+            if (reconnectEntry) {
+              studentId = reconnectEntry[0];
+              const existing = reconnectEntry[1];
+              existing.ws = ws;
+              existing.connected = true;
+            } else {
+              studentId = nanoid(5);
+              const avatarSeed = Math.random().toString(36).substring(7);
+              room.students.set(studentId, { ws, connected: true, name: message.name, avatarSeed, responses: {}, score: 0 });
+            }
+
+            const currentStudent = room.students.get(studentId)!;
             currentRoomPin = message.pin;
-            
+
             ws.send(JSON.stringify({ 
               type: "JOIN_SUCCESS", 
               studentId,
-              avatarSeed,
+              avatarSeed: currentStudent.avatarSeed,
               presentation: {
                 id: room.presentationId,
                 globalBackgroundImage: db.prepare("SELECT globalBackgroundImage FROM presentations WHERE id = ?").get(room.presentationId)?.globalBackgroundImage
@@ -708,9 +727,9 @@ wss.on("connection", (ws) => {
               room.host.send(JSON.stringify({ 
                 type: "STUDENT_JOINED", 
                 id: studentId, 
-                name: message.name,
-                avatarSeed,
-                count: room.students.size 
+                name: currentStudent.name,
+                avatarSeed: currentStudent.avatarSeed,
+                count: getConnectedStudentsCount(room)
               }));
             }
 
@@ -799,7 +818,7 @@ wss.on("connection", (ws) => {
                 room.host.send(JSON.stringify(finalUpdate));
               }
               room.students.forEach(s => {
-                if (s.ws.readyState === WebSocket.OPEN) {
+                if (s.ws?.readyState === WebSocket.OPEN) {
                   s.ws.send(JSON.stringify({ ...finalUpdate, yourScore: s.score }));
                 }
               });
@@ -816,7 +835,7 @@ wss.on("connection", (ws) => {
               room.host.send(JSON.stringify(update));
             }
             room.students.forEach(s => {
-              if (s.ws.readyState === WebSocket.OPEN) {
+              if (s.ws?.readyState === WebSocket.OPEN) {
                 s.ws.send(JSON.stringify(update));
               }
             });
@@ -833,7 +852,7 @@ wss.on("connection", (ws) => {
               .sort((a, b) => b.score - a.score);
             
             room.students.forEach(s => {
-              if (s.ws.readyState === WebSocket.OPEN) {
+              if (s.ws?.readyState === WebSocket.OPEN) {
                 s.ws.send(JSON.stringify({ 
                   type: "SHOW_LEADERBOARD", 
                   show: message.show,
@@ -883,7 +902,7 @@ wss.on("connection", (ws) => {
             room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_UPDATE', activity: hostUpdate }));
           }
           room.students.forEach((student) => {
-            if (student.ws.readyState === WebSocket.OPEN) {
+            if (student.ws?.readyState === WebSocket.OPEN) {
               student.ws.send(JSON.stringify({
                 type: 'LIVE_ACTIVITY_START',
                 activity: {
@@ -908,7 +927,7 @@ wss.on("connection", (ws) => {
             room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_END' }));
           }
           room.students.forEach((student) => {
-            if (student.ws.readyState === WebSocket.OPEN) {
+            if (student.ws?.readyState === WebSocket.OPEN) {
               student.ws.send(JSON.stringify({ type: 'LIVE_ACTIVITY_END' }));
             }
           });
@@ -922,12 +941,14 @@ wss.on("connection", (ws) => {
           const student = room.students.get(studentId);
           if (!student) break;
 
+          if (message.activityId && message.activityId !== room.liveActivity.id) break;
+
           const normalizedResponse = String(message.response || '').trim();
           if (!normalizedResponse) break;
 
           room.liveActivity.responses[studentId] = normalizedResponse;
 
-          if (student.ws.readyState === WebSocket.OPEN) {
+          if (student.ws?.readyState === WebSocket.OPEN) {
             student.ws.send(JSON.stringify({ type: 'LIVE_ACTIVITY_ACK' }));
           }
 
@@ -1079,18 +1100,22 @@ wss.on("connection", (ws) => {
         if (room.host === ws) {
           // Notify students and close room
           room.students.forEach(s => {
-            if (s.ws.readyState === WebSocket.OPEN) {
+            if (s.ws?.readyState === WebSocket.OPEN) {
               s.ws.send(JSON.stringify({ type: "ROOM_CLOSED" }));
             }
           });
           rooms.delete(currentRoomPin);
         } else if (studentId) {
-          room.students.delete(studentId);
+          const student = room.students.get(studentId);
+          if (student) {
+            student.connected = false;
+            student.ws = null;
+          }
           if (room.host.readyState === WebSocket.OPEN) {
             room.host.send(JSON.stringify({ 
               type: "STUDENT_LEFT", 
               id: studentId,
-              count: room.students.size 
+              count: getConnectedStudentsCount(room) 
             }));
           }
         }

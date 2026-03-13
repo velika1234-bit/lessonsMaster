@@ -591,7 +591,6 @@ const ReportDetail = ({ user }: { user: User }) => {
               <div className="flex justify-between items-center gap-3 mb-2">
                 <div className="font-semibold text-gray-800">#{slide.index + 1} • {slide.title}</div>
                 <div className="text-sm font-bold text-indigo-600">{slide.accuracy.toFixed(1)}%</div>
-              
               </div>
               <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden mb-2">
                 <div className="h-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, slide.accuracy))}%` }} />
@@ -2416,7 +2415,15 @@ const HostView = ({ user }: { user: User }) => {
           setLiveActivity(msg.liveActivity || null);
           break;
         case 'STUDENT_JOINED':
-          setStudents(prev => [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }]);
+          setStudents(prev => {
+            const existingIndex = prev.findIndex((student) => student.id === msg.id);
+            if (existingIndex >= 0) {
+              const updated = [...prev];
+              updated[existingIndex] = { ...updated[existingIndex], name: msg.name, avatarSeed: msg.avatarSeed };
+              return updated;
+            }
+            return [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }];
+          });
           break;
         case 'STUDENT_LEFT':
           setStudents(prev => prev.filter(s => s.id !== msg.id));
@@ -2766,7 +2773,6 @@ const HostView = ({ user }: { user: User }) => {
                 </div>
                 <Button className="h-16 text-xl" onClick={downloadReport} disabled={isDownloadingReport}>
                   <Download className="w-6 h-6" /> {isDownloadingReport ? 'Генериране...' : 'Изтегли PDF Отчет'}
-               
                 </Button>
                 <Button variant="secondary" className="h-16 text-xl" onClick={finishSession} disabled={isSavingReport}>
                   {isSavingReport ? 'Запазване...' : isReportSaved ? 'Към Доклади' : 'Запази в Доклади'}
@@ -3539,7 +3545,11 @@ const StudentView = () => {
     if (!liveActivity || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
     const normalized = response.trim();
     if (!normalized) return;
-    ws.current.send(JSON.stringify({ type: 'STUDENT_ACTIVITY_RESPONSE', response: normalized }));
+    ws.current.send(JSON.stringify({
+      type: 'STUDENT_ACTIVITY_RESPONSE',
+      activityId: liveActivity.id,
+      response: normalized
+    }));
     setLiveActivityResponse(normalized);
     setLiveActivitySubmitted(true);
   };
