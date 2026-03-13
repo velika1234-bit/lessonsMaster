@@ -3958,7 +3958,53 @@ const StudentView = () => {
             {!submitted && (
               <Button
                 className="h-16 text-xl"
-                onClick={() => {
+                onClick={async () => {
+                  const captureStudentScreen = async () => {
+                    if (!navigator.mediaDevices?.getDisplayMedia) return null;
+
+                    let stream: MediaStream | null = null;
+                    try {
+                      stream = await navigator.mediaDevices.getDisplayMedia({
+                        video: {
+                          displaySurface: 'browser',
+                        } as MediaTrackConstraints,
+                        audio: false,
+                      });
+
+                      const track = stream.getVideoTracks()[0];
+                      if (!track) return null;
+
+                      const video = document.createElement('video');
+                      video.srcObject = stream;
+                      video.playsInline = true;
+
+                      await video.play();
+
+                      const screenshotCanvas = document.createElement('canvas');
+                      screenshotCanvas.width = video.videoWidth;
+                      screenshotCanvas.height = video.videoHeight;
+                      const screenshotCtx = screenshotCanvas.getContext('2d');
+                      if (!screenshotCtx) return null;
+
+                      screenshotCtx.drawImage(video, 0, 0, screenshotCanvas.width, screenshotCanvas.height);
+                      video.pause();
+                      video.srcObject = null;
+
+                      return screenshotCanvas.toDataURL('image/jpeg', 0.9);
+                    } catch (error) {
+                      console.warn('Screen capture denied or unavailable, using whiteboard export fallback.', error);
+                      return null;
+                    } finally {
+                      stream?.getTracks().forEach((track) => track.stop());
+                    }
+                  };
+
+                  const screenImage = await captureStudentScreen();
+                  if (screenImage) {
+                    submitResponse(screenImage);
+                    return;
+                  }
+
                   const canvas = whiteboardCanvasRef.current;
                   if (!canvas) return;
                   const exportCanvas = document.createElement('canvas');
