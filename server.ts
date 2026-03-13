@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import { nanoid } from "nanoid";
 import path from "path";
+import { existsSync, mkdirSync } from "fs";
 import { fileURLToPath } from "url";
 import bcrypt from "bcryptjs";
 import pkg from "jsonwebtoken";
@@ -28,6 +29,8 @@ const verifyToken = (token: string): { userId: string } | null => {
     return null;
   }
 };
+
+const normalizeAnswerText = (value: string) => value.toLowerCase().trim().replace(/\s+/g, " ");
 
 // Middleware to verify JWT from Authorization header
 const authenticateToken = (req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -58,10 +61,20 @@ const __dirname = path.dirname(__filename);
 
 // Database initialization with error handling
 let db: any;
+const dbFilePath = process.env.DATABASE_PATH || process.env.SQLITE_PATH || "presentations.db";
+
 try {
-  db = new Database("presentations.db");
+  const dbDir = path.dirname(dbFilePath);
+  if (dbDir && dbDir !== "." && !existsSync(dbDir)) {
+    mkdirSync(dbDir, { recursive: true });
+  }
+
+  db = new Database(dbFilePath);
   db.exec("PRAGMA foreign_keys = ON;");
-  console.log("Database initialized successfully");
+  db.exec("PRAGMA journal_mode = WAL;");
+  db.exec("PRAGMA synchronous = NORMAL;");
+  db.exec("PRAGMA busy_timeout = 5000;");
+  console.log(`Database initialized successfully at: ${dbFilePath}`);
 } catch (err) {
   console.error("Failed to initialize database:", err);
   process.exit(1);
@@ -156,6 +169,7 @@ const rooms = new Map<string, {
   presentationId: string;
   currentSlideIndex: number;
   privacyMode: boolean;
+  slides: any[];
   students: Map<string, { 
     ws: WebSocket; 
     name: string; 
@@ -163,10 +177,77 @@ const rooms = new Map<string, {
     responses: Record<number, any>;
     score: number;
   }>;
+  liveActivity: null | {
+    id: string;
+    type: 'poll' | 'wordcloud';
+    question: string;
+    options?: string[];
+    responses: Record<string, string>;
+  };
 }>();
+
+const buildLiveActivityPayload = (activity: null | {
+  id: string;
+  type: 'poll' | 'wordcloud';
+  question: string;
+  options?: string[];
+  responses: Record<string, string>;
+}) => {
+  if (!activity) return null;
+
+  if (activity.type === 'poll') {
+    const options = activity.options || [];
+    const counts = options.map((option) => ({
+      option,
+      count: Object.values(activity.responses).filter((value) => value === option).length
+    }));
+    return {
+      id: activity.id,
+      type: activity.type,
+      question: activity.question,
+      options,
+      counts,
+      totalResponses: Object.keys(activity.responses).length
+    };
+  }
+
+  const words = Object.values(activity.responses)
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean);
+  const countsMap: Record<string, number> = {};
+  for (const word of words) countsMap[word] = (countsMap[word] || 0) + 1;
+  const wordsCloud = Object.entries(countsMap)
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 40);
+
+  return {
+    id: activity.id,
+    type: activity.type,
+    question: activity.question,
+    words: wordsCloud,
+    totalResponses: Object.keys(activity.responses).length
+  };
+};
 
 // Map presentationId to active PIN to allow reconnection
 const presentationToPin = new Map<string, string>();
+
+const loadSlidesForPresentation = (presentationId: string) => {
+  return db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(presentationId);
+};
+
+const refreshRoomSlides = (presentationId: string) => {
+  const slides = loadSlidesForPresentation(presentationId);
+  for (const room of rooms.values()) {
+    if (room.presentationId === presentationId) {
+      room.slides = slides;
+      if (room.currentSlideIndex >= slides.length) {
+        room.currentSlideIndex = slides.length - 1;
+      }
+    }
+  }
+};
 
 // API Routes
 app.post("/api/auth/register", async (req, res) => {
@@ -335,7 +416,7 @@ const ensureTeacher = async (id: string, name: string = "Учител") => {
   if (!user) {
     console.log("Auto-creating user record for sync:", id);
     const hashedPassword = await bcrypt.hash(nanoid(32), 12);
-    db.prepare("INSERT INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
+    db.prepare("INSERT OR IGNORE INTO users (id, email, password, name) VALUES (?, ?, ?, ?)").run(
       id, 
       `${id}@internal.system`, 
       hashedPassword, 
@@ -429,6 +510,7 @@ app.put("/api/presentations/:id", authenticateToken, (req, res) => {
     });
 
     transaction();
+    refreshRoomSlides(req.params.id);
     res.json({ success: true });
   } catch (error: any) {
     console.error("Failed to update presentation:", error);
@@ -447,7 +529,7 @@ app.get("/api/reports", authenticateToken, async (req, res) => {
   const teacherId = (req as any).userId;
   await ensureTeacher(teacherId);
   const rows = db.prepare("SELECT * FROM reports WHERE teacher_id = ? ORDER BY created_at DESC").all(teacherId);
-  res.json(rows.map((r: any) => ({ ...r, data: JSON.parse(r.data) })));
+  res.json(rows.map((r: any) => ({ ...r, createdAt: r.created_at, data: JSON.parse(r.data) })));
 });
 
 app.get("/api/reports/:id", authenticateToken, async (req, res) => {
@@ -455,7 +537,7 @@ app.get("/api/reports/:id", authenticateToken, async (req, res) => {
   await ensureTeacher(teacherId);
   const row = db.prepare("SELECT * FROM reports WHERE id = ? AND teacher_id = ?").get(req.params.id, teacherId);
   if (!row) return res.status(404).json({ error: "Report not found" });
-  res.json({ ...row, data: JSON.parse((row as any).data) });
+  res.json({ ...row, createdAt: (row as any).created_at, data: JSON.parse((row as any).data) });
 });
 
 app.post("/api/reports", authenticateToken, async (req, res) => {
@@ -517,6 +599,20 @@ app.get("/api/config", (req, res) => {
   });
 });
 
+app.get("/env.js", (req, res) => {
+  const runtimeConfig = {
+    VITE_FIREBASE_API_KEY: process.env.VITE_FIREBASE_API_KEY || "",
+    VITE_FIREBASE_AUTH_DOMAIN: process.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+    VITE_FIREBASE_PROJECT_ID: process.env.VITE_FIREBASE_PROJECT_ID || "",
+    VITE_FIREBASE_STORAGE_BUCKET: process.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+    VITE_FIREBASE_MESSAGING_SENDER_ID: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+    VITE_FIREBASE_APP_ID: process.env.VITE_FIREBASE_APP_ID || ""
+  };
+
+  res.type("application/javascript");
+  res.send(`window.__RUNTIME_CONFIG__ = ${JSON.stringify(runtimeConfig)};`);
+});
+
 // Health check endpoint for Railway - MUST be before static file serving
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", timestamp: new Date().toISOString() });
@@ -556,7 +652,9 @@ wss.on("connection", (ws) => {
               presentationId: message.presentationId,
               currentSlideIndex: -1,
               privacyMode: false,
-              students: new Map()
+              slides: loadSlidesForPresentation(message.presentationId),
+              students: new Map(),
+              liveActivity: null
             });
           }
           
@@ -565,8 +663,8 @@ wss.on("connection", (ws) => {
           if (!room) break;
           
           // 3. Always send the current state back to the host
-          const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
-          const currentSlide = slides[room.currentSlideIndex];
+          room.slides = loadSlidesForPresentation(room.presentationId);
+          const currentSlide = room.slides[room.currentSlideIndex];
           
           ws.send(JSON.stringify({ 
             type: "ROOM_CREATED", 
@@ -580,7 +678,8 @@ wss.on("connection", (ws) => {
               ...currentSlide,
               content: JSON.parse(currentSlide.content)
             } : null,
-            currentSlideIndex: room.currentSlideIndex
+            currentSlideIndex: room.currentSlideIndex,
+            liveActivity: buildLiveActivityPayload(room.liveActivity)
           }));
           break;
         }
@@ -615,14 +714,26 @@ wss.on("connection", (ws) => {
             }
 
             // Send current slide state to student
-            const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+            const currentSlide = room.currentSlideIndex >= 0 ? room.slides[room.currentSlideIndex] : null;
             ws.send(JSON.stringify({ 
               type: "SLIDE_UPDATE", 
               index: room.currentSlideIndex,
-              slide: (room.currentSlideIndex >= 0 && slides[room.currentSlideIndex]) 
-                ? { ...slides[room.currentSlideIndex], content: JSON.parse(slides[room.currentSlideIndex].content) } 
+              slide: currentSlide
+                ? { ...currentSlide, content: JSON.parse(currentSlide.content) }
                 : null
             }));
+
+            if (room.liveActivity && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: "LIVE_ACTIVITY_START",
+                activity: {
+                  id: room.liveActivity.id,
+                  type: room.liveActivity.type,
+                  question: room.liveActivity.question,
+                  options: room.liveActivity.options || []
+                }
+              }));
+            }
           } else {
             ws.send(JSON.stringify({ type: "ERROR", message: "Invalid PIN" }));
           }
@@ -659,7 +770,7 @@ wss.on("connection", (ws) => {
               room.currentSlideIndex++;
             }
             
-            const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+            const slides = room.slides;
             
             if (slides.length === 0) {
               ws.send(JSON.stringify({ type: "ERROR", message: "Презентацията няма слайдове. Моля добавете слайдове и ги запазете." }));
@@ -734,6 +845,98 @@ wss.on("connection", (ws) => {
           break;
         }
 
+        case "HOST_START_ACTIVITY": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || room.host !== ws) break;
+
+          const activityType = message.activityType === 'poll' ? 'poll' : 'wordcloud';
+          const question = String(message.question || '').trim();
+          if (!question) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: 'Въведете въпрос за live активността.' }));
+            break;
+          }
+
+          const options = activityType === 'poll'
+            ? (Array.isArray(message.options) ? message.options : [])
+                .map((value: any) => String(value || '').trim())
+                .filter(Boolean)
+                .slice(0, 8)
+            : undefined;
+
+          if (activityType === 'poll' && (!options || options.length < 2)) {
+            ws.send(JSON.stringify({ type: 'ERROR', message: 'Анкетата изисква поне 2 опции.' }));
+            break;
+          }
+
+          room.liveActivity = {
+            id: nanoid(8),
+            type: activityType,
+            question,
+            options,
+            responses: {}
+          };
+
+          const hostUpdate = buildLiveActivityPayload(room.liveActivity);
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_UPDATE', activity: hostUpdate }));
+          }
+          room.students.forEach((student) => {
+            if (student.ws.readyState === WebSocket.OPEN) {
+              student.ws.send(JSON.stringify({
+                type: 'LIVE_ACTIVITY_START',
+                activity: {
+                  id: room.liveActivity?.id,
+                  type: room.liveActivity?.type,
+                  question: room.liveActivity?.question,
+                  options: room.liveActivity?.options || []
+                }
+              }));
+            }
+          });
+          break;
+        }
+
+        case "HOST_END_ACTIVITY": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || room.host !== ws) break;
+          room.liveActivity = null;
+
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_END' }));
+          }
+          room.students.forEach((student) => {
+            if (student.ws.readyState === WebSocket.OPEN) {
+              student.ws.send(JSON.stringify({ type: 'LIVE_ACTIVITY_END' }));
+            }
+          });
+          break;
+        }
+
+        case "STUDENT_ACTIVITY_RESPONSE": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || !studentId || !room.liveActivity) break;
+          const student = room.students.get(studentId);
+          if (!student) break;
+
+          const normalizedResponse = String(message.response || '').trim();
+          if (!normalizedResponse) break;
+
+          room.liveActivity.responses[studentId] = normalizedResponse;
+
+          if (student.ws.readyState === WebSocket.OPEN) {
+            student.ws.send(JSON.stringify({ type: 'LIVE_ACTIVITY_ACK' }));
+          }
+
+          const hostUpdate = buildLiveActivityPayload(room.liveActivity);
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_UPDATE', activity: hostUpdate }));
+          }
+          break;
+        }
+
         case "SUBMIT_RESPONSE": {
           if (!currentRoomPin) break;
           const room = rooms.get(currentRoomPin);
@@ -743,12 +946,12 @@ wss.on("connection", (ws) => {
               student.responses[room.currentSlideIndex] = message.response;
               
               // Score calculation
-              const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
-              const currentSlide = slides[room.currentSlideIndex];
+              const currentSlide = room.slides[room.currentSlideIndex];
               if (currentSlide) {
                 const content = JSON.parse(currentSlide.content);
-                const slidePoints = currentSlide.points || 100;
+                const slidePoints = currentSlide.points ?? 1;
                 let isCorrect = false;
+                let isGraded = true;
 
                 if (currentSlide.type === 'quiz-single' || currentSlide.type === 'boolean') {
                   const correctIdx = content.options.findIndex((o: any) => o.isCorrect);
@@ -777,7 +980,7 @@ wss.on("connection", (ws) => {
                     const sPos = studentPositions[l.id];
                     if (sPos) {
                       const dist = Math.sqrt(Math.pow(sPos.x - l.x, 2) + Math.pow(sPos.y - l.y, 2));
-                      if (dist < 10) { // 10% tolerance
+                      if (dist < 14) { // 14% tolerance for easier label placement
                         correctCount++;
                       }
                     }
@@ -797,9 +1000,37 @@ wss.on("connection", (ws) => {
                   if (pairs.length > 0 && correctCount === pairs.length) {
                     isCorrect = true;
                   }
+                } else if (currentSlide.type === 'ordering') {
+                  const items = content.orderingItems || [];
+                  const responseOrder = Array.isArray(message.response) ? message.response : [];
+                  if (items.length > 0 && responseOrder.length === items.length) {
+                    isCorrect = items.every((item: any, idx: number) => responseOrder[idx] === item.id);
+                  }
+                } else if (currentSlide.type === 'categorization') {
+                  const items = content.categoryItems || [];
+                  const responseMap = message.response || {};
+                  if (items.length > 0) {
+                    isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
+                  }
+                } else if (currentSlide.type === 'open-question') {
+                  const expectedRaw = String(content.expectedAnswer || '').trim();
+                  const learnerRaw = typeof message.response === 'string' ? message.response : String(message.response || '');
+
+                  if (!expectedRaw) {
+                    isGraded = false;
+                  } else {
+                    const expectedAnswers = expectedRaw
+                      .split(/\r?\n|\|/)
+                      .map((answer: string) => normalizeAnswerText(answer))
+                      .filter(Boolean);
+                    const learnerAnswer = normalizeAnswerText(learnerRaw);
+                    isCorrect = learnerAnswer.length > 0 && expectedAnswers.includes(learnerAnswer);
+                  }
+                } else if (currentSlide.type === 'free-response' || currentSlide.type === 'whiteboard') {
+                  isGraded = false;
                 }
 
-                if (isCorrect) {
+                if (isGraded && isCorrect) {
                   student.score += slidePoints;
                 }
 
@@ -807,9 +1038,10 @@ wss.on("connection", (ws) => {
                 if (ws.readyState === WebSocket.OPEN) {
                   ws.send(JSON.stringify({
                     type: "FEEDBACK",
-                    isCorrect,
-                    pointsEarned: isCorrect ? slidePoints : 0,
-                    totalScore: student.score
+                    isCorrect: isGraded ? isCorrect : null,
+                    pointsEarned: (isGraded && isCorrect) ? slidePoints : 0,
+                    totalScore: student.score,
+                    message: isGraded ? undefined : "Този отговор е без автоматично точкуване."
                   }));
                 }
               }
@@ -872,6 +1104,7 @@ app.get("/api/sessions/:pin/report", (req, res) => {
 
   const presentation = db.prepare("SELECT * FROM presentations WHERE id = ?").get(room.presentationId);
   const slides = db.prepare("SELECT * FROM slides WHERE presentation_id = ? ORDER BY \"order\" ASC").all(room.presentationId);
+  const ephemeralOnlySlides = new Set(["whiteboard"]);
 
   const reportData = {
     presentationTitle: presentation.title,
@@ -879,7 +1112,14 @@ app.get("/api/sessions/:pin/report", (req, res) => {
     students: Array.from(room.students.values()).map(s => ({
       name: s.name,
       score: s.score,
-      responses: s.responses
+      responses: Object.fromEntries(
+        Object.entries(s.responses).filter(([slideIndex]) => {
+          const idx = Number(slideIndex);
+          const slide = slides[idx];
+          if (!slide) return true;
+          return !ephemeralOnlySlides.has(slide.type);
+        })
+      )
     })),
     slides: slides.map(s => ({
       type: s.type,
@@ -895,8 +1135,16 @@ const startServer = async () => {
   console.log(`Starting server in ${process.env.NODE_ENV || 'development'} mode`);
   console.log(`__dirname: ${__dirname}`);
   
-  if (process.env.NODE_ENV !== "production") {
-    console.log("Loading Vite dev server...");
+  const distPath = path.join(__dirname, "dist");
+  const hasBuiltClient = existsSync(path.join(distPath, "index.html"));
+
+  if (process.env.NODE_ENV !== "production" || !hasBuiltClient) {
+    if (process.env.NODE_ENV === "production" && !hasBuiltClient) {
+      console.warn(`dist/index.html not found at ${distPath}. Falling back to Vite middleware.`);
+    } else {
+      console.log("Loading Vite dev server...");
+    }
+
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -905,7 +1153,6 @@ const startServer = async () => {
     console.log("Vite middleware loaded");
   } else {
     // Serve built static files in production
-    const distPath = path.join(__dirname, "dist");
     console.log(`Serving static files from: ${distPath}`);
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
@@ -917,12 +1164,37 @@ const startServer = async () => {
     });
   }
 
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
     console.log(`Health check: http://localhost:${PORT}/health`);
   });
 };
+
+
+const shutdown = (signal: string) => {
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  wss.clients.forEach(client => {
+    try { client.close(); } catch {}
+  });
+
+  server.close(() => {
+    try {
+      db.close();
+      console.log('Database connection closed');
+    } catch (err) {
+      console.error('Error while closing database:', err);
+    }
+    process.exit(0);
+  });
+
+  // Force exit if graceful shutdown takes too long
+  setTimeout(() => process.exit(0), 5000).unref();
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 startServer().catch(err => {
   console.error("Failed to start server:", err);
