@@ -37,22 +37,22 @@ export const PresentationsList = ({
           className="flex items-center justify-between gap-4 px-6 py-4 border-b border-gray-100 last:border-b-0 hover:bg-indigo-50/40 transition-colors"
         >
           <div className="min-w-0 flex items-center gap-4">
-            <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0">
+            <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600 shrink-0" aria-hidden="true">
               <Layout className="w-5 h-5" />
             </div>
             <h3 className="text-base font-black text-gray-900 truncate">{presentation.title || 'Без заглавие'}</h3>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Button variant="secondary" className="h-10 px-4" onClick={() => onEdit(presentation.id)} title="Редактиране">
+            <Button variant="secondary" className="h-10 px-4" onClick={() => onEdit(presentation.id)} title="Редактиране" aria-label={`Редактирай ${presentation.title || 'презентация'}`}>
               <Edit2 className="w-4 h-4 text-indigo-600" /> Редактирай
             </Button>
-            <Button variant="primary" className="h-10 px-4" onClick={() => onHost(presentation.id)} title="Стартиране на урок">
+            <Button variant="primary" className="h-10 px-4" onClick={() => onHost(presentation.id)} title="Стартиране на урок" aria-label={`Стартирай ${presentation.title || 'презентация'}`}>
               <Play className="w-4 h-4 text-white fill-current" /> Пусни
             </Button>
-            <Button variant="secondary" className="h-10 px-3" onClick={() => onExport(presentation)} title="Изтегляне на файл">
+            <Button variant="secondary" className="h-10 px-3" onClick={() => onExport(presentation)} title="Изтегляне на файл" aria-label={`Експортирай ${presentation.title || 'презентация'}`}>
               <Download className="w-4 h-4 text-indigo-600" />
             </Button>
-            <Button variant="danger" className="h-10 px-3" onClick={() => onDelete(presentation.id)} title="Изтриване">
+            <Button variant="danger" className="h-10 px-3" onClick={() => onDelete(presentation.id)} title="Изтриване" aria-label={`Изтрий ${presentation.title || 'презентация'}`}>
               <Trash2 className="w-4 h-4 text-rose-600" />
             </Button>
           </div>

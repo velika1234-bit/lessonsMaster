@@ -53,8 +53,6 @@ import {
   Link
 } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { Button } from './components/ui/Button';
 import { Card } from './components/ui/Card';
 import { ReportsList } from './components/dashboard/ReportsList';
@@ -244,6 +242,7 @@ const getResponseForSlide = (student: any, index: number, slide?: any) => {
 const ReportsDashboard = ({ user }: { user: User }) => {
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
 
@@ -256,8 +255,10 @@ const ReportsDashboard = ({ user }: { user: User }) => {
         if (!res.ok) throw new Error('Failed to fetch');
         const data = await res.json();
         setReports(data);
+        setError(null);
       } catch (error) {
         console.error("Error fetching reports:", error);
+        setError('Не успяхме да заредим архивa. Опитайте отново.');
       } finally {
         setLoading(false);
       }
@@ -293,9 +294,11 @@ const ReportsDashboard = ({ user }: { user: User }) => {
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-20">
+        <div className="flex justify-center py-20" aria-live="polite">
           <Loader2 className="w-12 h-12 animate-spin text-indigo-600" />
         </div>
+      ) : error ? (
+        <div className="bg-rose-50 border border-rose-100 rounded-2xl p-6 text-rose-600 font-semibold" role="alert">{error}</div>
       ) : (
         <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden">
           <ReportsList
@@ -382,8 +385,13 @@ const ReportDetail = ({ user }: { user: User }) => {
   }, [id, user.id]);
 
   const downloadPDF = async () => {
+    const [{ jsPDF }, autoTableModule] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable')
+    ]);
+    const autoTable = autoTableModule.default;
     const doc = new jsPDF();
-    
+
     try {
       const fontUrl = 'https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/Roboto-Regular.ttf';
       const fontRes = await fetch(fontUrl);
@@ -625,6 +633,7 @@ type LiveActivityStudent = {
 const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => {
   const [presentations, setPresentations] = useState<Presentation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAiModal, setShowAiModal] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiSourceText, setAiSourceText] = useState('');
@@ -641,8 +650,10 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
         if (!res.ok) throw new Error('Failed to fetch');
         const data = await res.json();
         setPresentations(data);
+        setLoadError(null);
       } catch (error) {
         console.error("Error fetching presentations:", error);
+        setLoadError('Не успяхме да заредим презентациите.');
       } finally {
         setLoading(false);
       }
@@ -950,8 +961,13 @@ const Dashboard = ({ user, onLogout }: { user: User, onLogout: () => void }) => 
       </AnimatePresence>
 
       {loading ? (
-        <div className="flex justify-center py-20">
+        <div className="flex justify-center py-20" aria-live="polite">
           <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+        </div>
+      ) : loadError ? (
+        <div className="bg-rose-50 border border-rose-100 rounded-2xl p-6 text-rose-600 font-semibold" role="alert">
+          <p>{loadError}</p>
+          <Button variant="secondary" className="mt-4" onClick={() => window.location.reload()}>Презареди</Button>
         </div>
       ) : (
         <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden">
@@ -2566,9 +2582,14 @@ const HostView = ({ user }: { user: User }) => {
         throw new Error(`Report fetch failed (${res.status})`);
       }
       const data = await res.json();
-      
+
+      const [{ jsPDF }, autoTableModule] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable')
+      ]);
+      const autoTable = autoTableModule.default;
       const doc = new jsPDF();
-      
+
       // Add Cyrillic support by loading a font
       try {
         const fontUrl = 'https://cdn.jsdelivr.net/gh/googlefonts/roboto@main/src/hinted/Roboto-Regular.ttf';
@@ -3532,6 +3553,8 @@ const StudentView = () => {
   const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
   const [whiteboardColor, setWhiteboardColor] = useState('#4f46e5');
   const [whiteboardLineWidth, setWhiteboardLineWidth] = useState(3);
+  const [whiteboardHistory, setWhiteboardHistory] = useState<string[]>([]);
+  const [whiteboardHistoryIndex, setWhiteboardHistoryIndex] = useState(-1);
   const [liveActivity, setLiveActivity] = useState<LiveActivityStudent | null>(null);
   const [liveActivityResponse, setLiveActivityResponse] = useState('');
   const [liveActivitySubmitted, setLiveActivitySubmitted] = useState(false);
@@ -3563,6 +3586,32 @@ const StudentView = () => {
   const [labelPositions, setLabelPositions] = useState<Record<string, { x: number, y: number }>>({});
   const [shuffledRightItems, setShuffledRightItems] = useState<any[]>([]);
 
+  const saveWhiteboardSnapshot = (canvas: HTMLCanvasElement) => {
+    try {
+      const snapshot = canvas.toDataURL('image/png');
+      const next = whiteboardHistory.slice(0, whiteboardHistoryIndex + 1);
+      if (next[next.length - 1] === snapshot) return;
+      const cappedHistory = [...next, snapshot].slice(-30);
+      setWhiteboardHistory(cappedHistory);
+      setWhiteboardHistoryIndex(cappedHistory.length - 1);
+    } catch (error) {
+      console.warn('Unable to save whiteboard snapshot', error);
+    }
+  };
+
+  const drawWhiteboardSnapshot = (snapshot: string) => {
+    const canvas = whiteboardCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const image = new Image();
+    image.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
+    image.src = snapshot;
+  };
+
   useEffect(() => {
     if (currentSlide?.type === 'labeling') {
       setLabelPositions({});
@@ -3588,6 +3637,19 @@ const StudentView = () => {
     if (currentSlide?.type === 'categorization') {
       setSelectedCategory((currentSlide.content.categories || [])[0] || null);
       setCategorizationResponse({});
+    }
+    if (currentSlide?.type === 'whiteboard') {
+      setWhiteboardHistory([]);
+      setWhiteboardHistoryIndex(-1);
+      requestAnimationFrame(() => {
+        const canvas = whiteboardCanvasRef.current;
+        if (!canvas) return;
+        if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+          canvas.width = canvas.clientWidth;
+          canvas.height = canvas.clientHeight;
+        }
+        saveWhiteboardSnapshot(canvas);
+      });
     }
   }, [currentSlide]);
 
@@ -3670,7 +3732,17 @@ const StudentView = () => {
             </div>
           )}
         </div>
-        <div className="bg-gray-100 px-3 py-1 rounded-full text-xs font-bold text-gray-500 uppercase">В сесия</div>
+        <div className="flex items-center gap-2">
+          {currentSlide && (
+            <div
+              className={`px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(currentSlide.type) || (currentSlide.type === 'open-question' && String(currentSlide.content.expectedAnswer || '').trim()) ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
+              aria-live="polite"
+            >
+              {(['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(currentSlide.type) || (currentSlide.type === 'open-question' && String(currentSlide.content.expectedAnswer || '').trim())) ? 'Автоматично точкуване' : 'Проверка от учител'}
+            </div>
+          )}
+          <div className="bg-gray-100 px-3 py-1 rounded-full text-xs font-bold text-gray-500 uppercase">В сесия</div>
+        </div>
       </header>
 
       <main className="flex-1 p-6 flex flex-col overflow-y-auto relative z-10 transition-colors"
@@ -3875,7 +3947,7 @@ const StudentView = () => {
                     type="button"
                     disabled={submitted}
                     onClick={() => setWhiteboardColor(color)}
-                    className={`w-7 h-7 rounded-full border-2 transition ${whiteboardColor === color ? 'border-gray-900 scale-110' : 'border-white shadow'}`}
+                    className={`w-7 h-7 rounded-full border-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${whiteboardColor === color ? 'border-gray-900 scale-110' : 'border-white shadow'}`}
                     style={{ backgroundColor: color }}
                     aria-label={`Избери цвят ${color}`}
                   />
@@ -3892,24 +3964,58 @@ const StudentView = () => {
                   onChange={(e) => setWhiteboardLineWidth(parseInt(e.target.value))}
                   disabled={submitted}
                   className="flex-1 accent-indigo-600"
+                  aria-label="Дебелина на четката"
                 />
                 <span className="text-xs font-bold text-indigo-600 w-6 text-right">{whiteboardLineWidth}</span>
               </div>
 
-              <Button
-                variant="secondary"
-                className="px-4 py-2"
-                disabled={submitted}
-                onClick={() => {
-                  const canvas = whiteboardCanvasRef.current;
-                  if (!canvas) return;
-                  const ctx = canvas.getContext('2d');
-                  if (!ctx) return;
-                  ctx.clearRect(0, 0, canvas.width, canvas.height);
-                }}
-              >
-                Изчисти
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  className="px-4 py-2"
+                  disabled={submitted || whiteboardHistoryIndex <= 0}
+                  aria-label="Отмени последния щрих"
+                  onClick={() => {
+                    const nextIndex = whiteboardHistoryIndex - 1;
+                    const snapshot = whiteboardHistory[nextIndex];
+                    if (nextIndex < 0 || !snapshot) return;
+                    drawWhiteboardSnapshot(snapshot);
+                    setWhiteboardHistoryIndex(nextIndex);
+                  }}
+                >
+                  Назад
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="px-4 py-2"
+                  disabled={submitted || whiteboardHistoryIndex >= whiteboardHistory.length - 1}
+                  aria-label="Върни отменения щрих"
+                  onClick={() => {
+                    const nextIndex = whiteboardHistoryIndex + 1;
+                    const snapshot = whiteboardHistory[nextIndex];
+                    if (!snapshot) return;
+                    drawWhiteboardSnapshot(snapshot);
+                    setWhiteboardHistoryIndex(nextIndex);
+                  }}
+                >
+                  Напред
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="px-4 py-2"
+                  disabled={submitted}
+                  onClick={() => {
+                    const canvas = whiteboardCanvasRef.current;
+                    if (!canvas) return;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) return;
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    saveWhiteboardSnapshot(canvas);
+                  }}
+                >
+                  Изчисти
+                </Button>
+              </div>
             </div>
 
             <div className="flex-1 bg-white rounded-3xl border-2 border-gray-200 relative overflow-hidden">
@@ -3918,7 +4024,9 @@ const StudentView = () => {
               )}
               <canvas 
                 ref={whiteboardCanvasRef}
-                className="absolute inset-0 w-full h-full cursor-crosshair touch-none"
+                className="absolute inset-0 w-full h-full cursor-crosshair touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                tabIndex={0}
+                aria-label="Поле за рисуване"
                 onPointerDown={(e) => {
                   const canvas = e.currentTarget;
                   const rect = canvas.getBoundingClientRect();
@@ -3948,7 +4056,29 @@ const StudentView = () => {
                   ctx.stroke();
                 }}
                 onPointerUp={(e) => {
-                  (e.currentTarget as any).isDrawing = false;
+                  const canvas = e.currentTarget;
+                  if ((canvas as any).isDrawing) {
+                    (canvas as any).isDrawing = false;
+                    saveWhiteboardSnapshot(canvas);
+                  }
+                }}
+                onPointerLeave={(e) => {
+                  const canvas = e.currentTarget;
+                  if ((canvas as any).isDrawing) {
+                    (canvas as any).isDrawing = false;
+                    saveWhiteboardSnapshot(canvas);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (submitted) return;
+                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+                    e.preventDefault();
+                    const nextIndex = e.shiftKey ? whiteboardHistoryIndex + 1 : whiteboardHistoryIndex - 1;
+                    const snapshot = whiteboardHistory[nextIndex];
+                    if (!snapshot) return;
+                    drawWhiteboardSnapshot(snapshot);
+                    setWhiteboardHistoryIndex(nextIndex);
+                  }
                 }}
                 onPointerLeave={(e) => {
                   (e.currentTarget as any).isDrawing = false;
