@@ -6,6 +6,7 @@ import {
   Plus, 
   Play, 
   Edit2, 
+  Eraser,
   Trash2, 
   ChevronRight, 
   ChevronLeft, 
@@ -3972,9 +3973,10 @@ const StudentView = () => {
               <div className="flex items-center gap-2">
                 <Button
                   variant="secondary"
-                  className="px-4 py-2"
+                  className="h-10 w-10 p-0"
                   disabled={submitted || whiteboardHistoryIndex <= 0}
                   aria-label="Отмени последния щрих"
+                  title="Назад"
                   onClick={() => {
                     const nextIndex = whiteboardHistoryIndex - 1;
                     const snapshot = whiteboardHistory[nextIndex];
@@ -3983,13 +3985,14 @@ const StudentView = () => {
                     setWhiteboardHistoryIndex(nextIndex);
                   }}
                 >
-                  Назад
+                  <ChevronLeft className="w-4 h-4" />
                 </Button>
                 <Button
                   variant="secondary"
-                  className="px-4 py-2"
+                  className="h-10 w-10 p-0"
                   disabled={submitted || whiteboardHistoryIndex >= whiteboardHistory.length - 1}
                   aria-label="Върни отменения щрих"
+                  title="Напред"
                   onClick={() => {
                     const nextIndex = whiteboardHistoryIndex + 1;
                     const snapshot = whiteboardHistory[nextIndex];
@@ -3998,12 +4001,14 @@ const StudentView = () => {
                     setWhiteboardHistoryIndex(nextIndex);
                   }}
                 >
-                  Напред
+                  <ChevronRight className="w-4 h-4" />
                 </Button>
                 <Button
                   variant="secondary"
-                  className="px-4 py-2"
+                  className="h-10 w-10 p-0"
                   disabled={submitted}
+                  aria-label="Изчисти рисунката"
+                  title="Изчисти"
                   onClick={() => {
                     const canvas = whiteboardCanvasRef.current;
                     if (!canvas) return;
@@ -4013,7 +4018,7 @@ const StudentView = () => {
                     saveWhiteboardSnapshot(canvas);
                   }}
                 >
-                  Изчисти
+                  <Eraser className="w-4 h-4" />
                 </Button>
               </div>
             </div>
@@ -4079,9 +4084,6 @@ const StudentView = () => {
                     drawWhiteboardSnapshot(snapshot);
                     setWhiteboardHistoryIndex(nextIndex);
                   }
-                }}
-                onPointerLeave={(e) => {
-                  (e.currentTarget as any).isDrawing = false;
                 }}
               />
             </div>
