@@ -2693,6 +2693,8 @@ const HostView = ({ user }: { user: User }) => {
     });
   }, [currentSlide, responses]);
 
+  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
+
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
       <div className="text-center">
@@ -4077,6 +4079,9 @@ const StudentView = () => {
                     drawWhiteboardSnapshot(snapshot);
                     setWhiteboardHistoryIndex(nextIndex);
                   }
+                }}
+                onPointerLeave={(e) => {
+                  (e.currentTarget as any).isDrawing = false;
                 }}
               />
             </div>
