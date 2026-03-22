@@ -2577,6 +2577,12 @@ const HostView = ({ user }: { user: User }) => {
         case 'LIVE_ACTIVITY_END':
           setLiveActivity(null);
           break;
+        case 'LIVE_ACTIVITY_UPDATE':
+          setLiveActivity(msg.activity || null);
+          break;
+        case 'LIVE_ACTIVITY_END':
+          setLiveActivity(null);
+          break;
         case 'PRESENTATION_FINISHED':
           setLeaderboard(msg.leaderboard);
           setShowLeaderboard(true);
