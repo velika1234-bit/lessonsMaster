@@ -101,6 +101,27 @@ const getYouTubeEmbedUrl = (url: string) => {
   return videoId ? `https://www.youtube.com/embed/${videoId}` : url;
 };
 
+const RISK_THRESHOLDS = {
+  lowActivityRate: 0.5,
+  lowAccuracyRate: 0.5,
+  lowScore: 3,
+} as const;
+
+const getRiskSignals = (metrics: { activityRate: number; accuracyRate: number; score: number }) => {
+  const signals: string[] = [];
+  if (metrics.activityRate < RISK_THRESHOLDS.lowActivityRate) signals.push('ниска активност');
+  if (metrics.accuracyRate < RISK_THRESHOLDS.lowAccuracyRate) signals.push('ниска точност');
+  if (metrics.score < RISK_THRESHOLDS.lowScore) signals.push('нисък резултат');
+  return signals;
+};
+
+const isTrackableSlideForRisk = (slide: any) => {
+  if (!slide) return false;
+  if (['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization'].includes(slide.type)) return true;
+  if (slide.type === 'open-question' && String(slide.content?.expectedAnswer || '').trim()) return true;
+  return false;
+};
+
 // --- Types ---
 
 // --- Global API Key Management ---
@@ -330,11 +351,12 @@ const ReportDetail = ({ user }: { user: User }) => {
       : 0;
 
 
-    const answerableSlideTypes = new Set(['quiz-single', 'quiz-multi', 'boolean', 'hotspot', 'labeling', 'matching', 'ordering', 'categorization', 'open-question']);
-    const slideStats = (report.data?.slides || [])
-      .map((slide: any, idx: number) => {
-        if (!answerableSlideTypes.has(slide.type)) return null;
-        if (slide.type === 'open-question' && !String(slide.content?.expectedAnswer || '').trim()) return null;
+    const trackableSlides = (report.data?.slides || [])
+      .map((slide: any, idx: number) => ({ slide, idx }))
+      .filter(({ slide }: any) => isTrackableSlideForRisk(slide));
+
+    const slideStats = trackableSlides
+      .map(({ slide, idx }: any) => {
         const responses = students
           .map((student: any) => getResponseForSlide(student, idx, slide))
           .filter((response: any) => response !== undefined && response !== null);
@@ -353,8 +375,31 @@ const ReportDetail = ({ user }: { user: User }) => {
           accuracy,
         };
       })
-      .filter(Boolean)
       .sort((a: any, b: any) => b.accuracy - a.accuracy);
+
+    const atRiskList = students
+      .map((student: any) => {
+        const attempted = trackableSlides.filter(({ idx }: any) => {
+          const response = getResponseForSlide(student, idx, report.data?.slides?.[idx]);
+          return response !== undefined && response !== null;
+        });
+        const correct = attempted.filter(({ idx, slide }: any) => {
+          const response = getResponseForSlide(student, idx, slide);
+          return isResponseCorrectForSlide(slide, response);
+        }).length;
+        const activityRate = trackableSlides.length ? attempted.length / trackableSlides.length : 1;
+        const accuracyRate = attempted.length ? correct / attempted.length : 0;
+        const signals = getRiskSignals({ activityRate, accuracyRate, score: student.score || 0 });
+        return {
+          ...student,
+          signals,
+          activityRate,
+          accuracyRate,
+        };
+      })
+      .filter((student: any) => student.signals.length > 0)
+      .sort((a: any, b: any) => b.signals.length - a.signals.length || a.score - b.score)
+      .slice(0, 5);
 
     return {
       students,
@@ -364,6 +409,8 @@ const ReportDetail = ({ user }: { user: User }) => {
       topStudent: students[0],
       lowStudent: students[students.length - 1],
       slideStats,
+      atRiskCount: atRiskList.length,
+      atRiskList,
     };
   }, [report]);
 
@@ -470,6 +517,22 @@ const ReportDetail = ({ user }: { user: User }) => {
       currentY += 10;
     });
 
+    const atRiskList = reportAnalytics?.atRiskList || [];
+    if (atRiskList.length > 0) {
+      if (currentY > 240) {
+        doc.addPage();
+        currentY = 20;
+      }
+      doc.setFontSize(15);
+      doc.text('Teacher highlights (Рискови ученици)', 20, currentY);
+      currentY += 8;
+      doc.setFontSize(11);
+      atRiskList.forEach((student: any) => {
+        doc.text(`- ${student.name}: ${student.signals.join(', ')}`, 20, currentY);
+        currentY += 6;
+      });
+    }
+
     doc.save(`report-${report.id}.pdf`);
   };
 
@@ -554,6 +617,23 @@ const ReportDetail = ({ user }: { user: User }) => {
           )}
         </Card>
       </div>
+
+      <Card className="mb-8">
+        <h2 className="text-xl font-bold mb-4">Teacher highlights</h2>
+        <p className="text-sm text-amber-700 font-semibold mb-3">⚠ Рискови ученици: <span className="font-black">{reportAnalytics?.atRiskCount || 0}</span></p>
+        {(reportAnalytics?.atRiskList || []).length > 0 ? (
+          <div className="space-y-2">
+            {reportAnalytics?.atRiskList.map((student: any, idx: number) => (
+              <div key={idx} className="p-3 rounded-xl bg-amber-50 border border-amber-100 text-sm text-amber-900">
+                <span className="font-black">{student.name}</span>
+                <span className="ml-2">{student.signals.join(', ')}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">Няма засечени рискови ученици по зададените прагове.</p>
+        )}
+      </Card>
 
       <Card className="mb-8">
         <h2 className="text-xl font-bold mb-6">Успеваемост по въпроси</h2>
@@ -2334,6 +2414,9 @@ const HostView = ({ user }: { user: User }) => {
   const [isDownloadingReport, setIsDownloadingReport] = useState(false);
   const [isReportSaved, setIsReportSaved] = useState(false);
   const [hostOrderingPreview, setHostOrderingPreview] = useState<{ id: string; text: string }[]>([]);
+  const [riskStatsByStudent, setRiskStatsByStudent] = useState<Record<string, { answered: number; correct: number }>>({});
+  const [studentScores, setStudentScores] = useState<Record<string, number>>({});
+  const [trackableSlidesSeen, setTrackableSlidesSeen] = useState(0);
   const [liveActivity, setLiveActivity] = useState<LiveActivityHost | null>(null);
   const [showLiveComposer, setShowLiveComposer] = useState(false);
   const [liveActivityType, setLiveActivityType] = useState<'poll' | 'wordcloud'>('poll');
@@ -2427,7 +2510,11 @@ const HostView = ({ user }: { user: User }) => {
       switch (msg.type) {
         case 'ROOM_CREATED':
           setPin(msg.pin);
-          if (msg.students) setStudents(msg.students);
+          if (msg.students) {
+            setStudents(msg.students);
+            setRiskStatsByStudent(Object.fromEntries(msg.students.map((student: any) => [student.id, { answered: 0, correct: 0 }])));
+            setStudentScores(Object.fromEntries(msg.students.map((student: any) => [student.id, student.score || 0])));
+          }
           if (msg.currentSlide) setCurrentSlide(msg.currentSlide);
           setLiveActivity(msg.liveActivity || null);
           break;
@@ -2441,6 +2528,8 @@ const HostView = ({ user }: { user: User }) => {
             }
             return [...prev, { id: msg.id, name: msg.name, avatarSeed: msg.avatarSeed }];
           });
+          setRiskStatsByStudent(prev => ({ ...prev, [msg.id]: prev[msg.id] || { answered: 0, correct: 0 } }));
+          setStudentScores(prev => ({ ...prev, [msg.id]: prev[msg.id] || 0 }));
           break;
         case 'STUDENT_LEFT':
           setStudents(prev => prev.filter(s => s.id !== msg.id));
@@ -2449,6 +2538,9 @@ const HostView = ({ user }: { user: User }) => {
           console.log("Received slide update:", msg.slide);
           setCurrentSlide(msg.slide);
           setResponses({});
+          if (isTrackableSlideForRisk(msg.slide)) {
+            setTrackableSlidesSeen(prev => prev + 1);
+          }
           if (msg.slide?.duration) {
             setTimeLeft(msg.slide.duration);
           } else {
@@ -2458,9 +2550,32 @@ const HostView = ({ user }: { user: User }) => {
         case 'ERROR':
           alert(`Грешка: ${msg.message}`);
           break;
-        case 'RESPONSE_RECEIVED':
+        case 'RESPONSE_RECEIVED': {
           setResponses(prev => ({ ...prev, [msg.id]: msg.response }));
           if (msg.leaderboard) setLeaderboard(msg.leaderboard);
+          if (typeof msg.score === 'number') {
+            setStudentScores(prev => ({ ...prev, [msg.id]: msg.score }));
+          }
+          if (isTrackableSlideForRisk(currentSlide)) {
+            const isCorrect = isResponseCorrectForSlide(currentSlide, msg.response);
+            setRiskStatsByStudent(prev => {
+              const current = prev[msg.id] || { answered: 0, correct: 0 };
+              return {
+                ...prev,
+                [msg.id]: {
+                  answered: current.answered + 1,
+                  correct: current.correct + (isCorrect ? 1 : 0),
+                },
+              };
+            });
+          }
+          break;
+        }
+        case 'LIVE_ACTIVITY_UPDATE':
+          setLiveActivity(msg.activity || null);
+          break;
+        case 'LIVE_ACTIVITY_END':
+          setLiveActivity(null);
           break;
         case 'LIVE_ACTIVITY_UPDATE':
           setLiveActivity(msg.activity || null);
@@ -2624,6 +2739,26 @@ const HostView = ({ user }: { user: User }) => {
       doc.text(`Брой ученици: ${totalStudents}`, 20, 65);
       doc.text(`Среден резултат: ${avgScore.toFixed(1)} т.`, 20, 72);
 
+      const trackableSlides = (data.slides || []).map((slide: any, idx: number) => ({ slide, idx })).filter(({ slide }: any) => isTrackableSlideForRisk(slide));
+      const atRiskList = (data.students || [])
+        .map((student: any) => {
+          const attempted = trackableSlides.filter(({ idx, slide }: any) => {
+            const response = getResponseForSlide(student, idx, slide);
+            return response !== undefined && response !== null;
+          });
+          const correct = attempted.filter(({ idx, slide }: any) => {
+            const response = getResponseForSlide(student, idx, slide);
+            return isResponseCorrectForSlide(slide, response);
+          }).length;
+          const activityRate = trackableSlides.length ? attempted.length / trackableSlides.length : 1;
+          const accuracyRate = attempted.length ? correct / attempted.length : 0;
+          const signals = getRiskSignals({ activityRate, accuracyRate, score: student.score || 0 });
+          return { ...student, signals };
+        })
+        .filter((student: any) => student.signals.length > 0)
+        .sort((a: any, b: any) => b.signals.length - a.signals.length || a.score - b.score)
+        .slice(0, 5);
+
       // Student Scores Table
       const tableData = data.students
         .sort((a: any, b: any) => b.score - a.score)
@@ -2669,6 +2804,21 @@ const HostView = ({ user }: { user: User }) => {
           currentY += 20;
         }
       });
+
+      if (atRiskList.length > 0) {
+        if (currentY > 240) {
+          doc.addPage();
+          currentY = 20;
+        }
+        doc.setFontSize(15);
+        doc.text('Teacher highlights (Рискови ученици)', 20, currentY);
+        currentY += 8;
+        doc.setFontSize(11);
+        atRiskList.forEach((student: any) => {
+          doc.text(`- ${student.name}: ${student.signals.join(', ')}`, 20, currentY);
+          currentY += 6;
+        });
+      }
       
       doc.save(`report-${pin}.pdf`);
     } catch (err) {
@@ -2694,7 +2844,30 @@ const HostView = ({ user }: { user: User }) => {
     });
   }, [currentSlide, responses]);
 
-  const [isPrivacyMode, setIsPrivacyMode] = useState(false);
+  const atRiskInsights = useMemo(() => {
+    const list = students
+      .map((student: any) => {
+        const stats = riskStatsByStudent[student.id] || { answered: 0, correct: 0 };
+        const activityRate = trackableSlidesSeen > 0 ? stats.answered / trackableSlidesSeen : 1;
+        const accuracyRate = stats.answered > 0 ? stats.correct / stats.answered : 0;
+        const score = studentScores[student.id] ?? student.score ?? 0;
+        const signals = getRiskSignals({ activityRate, accuracyRate, score });
+        return {
+          ...student,
+          score,
+          signals,
+          activityRate,
+          accuracyRate,
+        };
+      })
+      .filter((student: any) => student.signals.length > 0)
+      .sort((a: any, b: any) => b.signals.length - a.signals.length || a.score - b.score);
+
+    return {
+      atRiskCount: list.length,
+      atRiskList: list.slice(0, 5),
+    };
+  }, [students, riskStatsByStudent, studentScores, trackableSlidesSeen]);
 
   if (!pin) return (
     <div className="h-screen flex items-center justify-center bg-indigo-600 text-white">
@@ -2793,6 +2966,21 @@ const HostView = ({ user }: { user: User }) => {
                   <h4 className="text-indigo-600 font-bold mb-2">Общо ученици</h4>
                   <div className="text-5xl font-black">{students.length}</div>
                 </div>
+                <div className="bg-amber-50 p-6 rounded-3xl border border-amber-100 text-left">
+                  <h4 className="text-amber-700 font-black mb-2">Teacher highlights</h4>
+                  <p className="text-sm text-amber-700 font-semibold mb-3">⚠ Рискови ученици: <span className="font-black">{atRiskInsights.atRiskCount}</span></p>
+                  {atRiskInsights.atRiskList.length > 0 ? (
+                    <ul className="space-y-2 text-xs text-amber-800">
+                      {atRiskInsights.atRiskList.map((student: any) => (
+                        <li key={student.id} className="bg-white/70 border border-amber-100 rounded-xl px-3 py-2">
+                          <span className="font-bold">{student.name}</span>: {student.signals.join(', ')}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-amber-700">Няма засечени рискови ученици по текущите прагове.</p>
+                  )}
+                </div>
                 <Button className="h-16 text-xl" onClick={downloadReport} disabled={isDownloadingReport}>
                   <Download className="w-6 h-6" /> {isDownloadingReport ? 'Генериране...' : 'Изтегли PDF Отчет'}
                 </Button>
@@ -2859,18 +3047,27 @@ const HostView = ({ user }: { user: User }) => {
         
         <div className="grid grid-cols-6 gap-4 mb-12">
           <AnimatePresence>
-            {students.map(s => (
-              <motion.div 
-                key={s.id}
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-                className="bg-white/20 p-4 rounded-2xl text-center font-bold flex flex-col items-center gap-2"
-              >
-                <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-12 h-12" alt="avatar" />
-                <span className="truncate w-full">{s.name}</span>
-              </motion.div>
-            ))}
+            {students.map(s => {
+              const riskEntry = atRiskInsights.atRiskList.find((riskStudent: any) => riskStudent.id === s.id);
+              return (
+                <motion.div 
+                  key={s.id}
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0, opacity: 0 }}
+                  className={`bg-white/20 p-4 rounded-2xl text-center font-bold flex flex-col items-center gap-2 ${riskEntry ? 'ring-2 ring-amber-300 bg-amber-500/20' : ''}`}
+                >
+                  <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-12 h-12" alt="avatar" />
+                  <span className="truncate w-full">{s.name}</span>
+                  {riskEntry && (
+                    <div className="text-[10px] leading-tight">
+                      <span className="inline-block px-2 py-1 rounded-full bg-amber-100 text-amber-700 font-black uppercase tracking-wider">⚠ Риск</span>
+                      <p className="mt-1 text-amber-100 font-semibold">{riskEntry.signals.join(', ')}</p>
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
           </AnimatePresence>
         </div>
 
@@ -3025,6 +3222,20 @@ const HostView = ({ user }: { user: User }) => {
           </div>
         )}
 
+        {atRiskInsights.atRiskCount > 0 && !showLeaderboard && (
+          <div className="absolute right-12 top-12 z-20 w-80 bg-amber-50/95 border border-amber-100 shadow-xl rounded-3xl p-5">
+            <h4 className="text-sm font-black text-amber-800 uppercase tracking-widest mb-2">⚠ Рискови ученици ({atRiskInsights.atRiskCount})</h4>
+            <div className="space-y-2">
+              {atRiskInsights.atRiskList.map((student: any) => (
+                <div key={student.id} className="p-3 rounded-xl bg-white border border-amber-100">
+                  <div className="text-sm font-bold text-gray-900">{student.name}</div>
+                  <div className="text-xs text-amber-700 font-semibold">{student.signals.join(', ')}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {showLeaderboard && (
           <motion.div 
             initial={{ x: 300, opacity: 0 }}
@@ -3036,18 +3247,24 @@ const HostView = ({ user }: { user: User }) => {
               <Users className="text-indigo-600" /> Топ 5
             </h3>
             <div className="space-y-4">
-              {leaderboard.map((s, i) => (
-                <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
-                  <div className="flex items-center gap-3">
+              {leaderboard.map((s, i) => {
+                const riskEntry = atRiskInsights.atRiskList.find((student: any) => student.name === s.name);
+                return (
+                <div key={i} className={`flex items-center justify-between p-4 rounded-2xl ${riskEntry ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50'}`}>
+                  <div className="flex items-center gap-3 min-w-0">
                     <span className="w-6 h-6 rounded-full bg-indigo-600 text-white text-[10px] flex items-center justify-center font-bold">
                       {i + 1}
                     </span>
                     <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-8 h-8" alt="avatar" />
-                    <span className="font-bold">{s.name}</span>
+                    <div className="min-w-0">
+                      <span className="font-bold block truncate">{s.name}</span>
+                      {riskEntry && <span className="text-[10px] font-bold text-amber-700">⚠ Риск: {riskEntry.signals.join(', ')}</span>}
+                    </div>
                   </div>
                   <span className="font-black text-indigo-600">{s.score}</span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </motion.div>
         )}
