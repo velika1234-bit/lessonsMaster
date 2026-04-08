@@ -696,18 +696,19 @@ const ReportDetail = ({ user }: { user: User }) => {
 
 type LiveActivityHost = {
   id: string;
-  type: 'poll' | 'wordcloud' | 'free-response';
+  type: 'poll' | 'wordcloud' | 'free-response' | 'whiteboard';
   question: string;
   options?: string[];
   counts?: { option: string; count: number }[];
   words?: { word: string; count: number }[];
   responses?: { value: string; count: number }[];
+  drawings?: { id: string; value: string }[];
   totalResponses: number;
 };
 
 type LiveActivityStudent = {
   id: string;
-  type: 'poll' | 'wordcloud' | 'free-response';
+  type: 'poll' | 'wordcloud' | 'free-response' | 'whiteboard';
   question: string;
   options?: string[];
 };
@@ -2420,7 +2421,7 @@ const HostView = ({ user }: { user: User }) => {
   const [trackableSlidesSeen, setTrackableSlidesSeen] = useState(0);
   const [liveActivity, setLiveActivity] = useState<LiveActivityHost | null>(null);
   const [showLiveComposer, setShowLiveComposer] = useState(false);
-  const [liveActivityType, setLiveActivityType] = useState<'poll' | 'wordcloud' | 'free-response'>('poll');
+  const [liveActivityType, setLiveActivityType] = useState<'poll' | 'wordcloud' | 'free-response' | 'whiteboard'>('poll');
   const [liveQuestion, setLiveQuestion] = useState('');
   const [liveOptionsText, setLiveOptionsText] = useState('Да\nНе');
   const timerRef = useRef<any>(null);
@@ -3122,6 +3123,9 @@ const HostView = ({ user }: { user: User }) => {
               <Button variant="secondary" onClick={() => { setLiveActivityType('free-response'); setShowLiveComposer(true); }}>
                 <Type className="w-4 h-4" /> Свободен отговор
               </Button>
+              <Button variant="secondary" onClick={() => { setLiveActivityType('whiteboard'); setShowLiveComposer(true); }}>
+                <Palette className="w-4 h-4" /> Бяла дъска
+              </Button>
             </>
           ) : (
             <Button variant="danger" onClick={endLiveActivity}>
@@ -3157,7 +3161,13 @@ const HostView = ({ user }: { user: User }) => {
           <div className="absolute inset-0 z-30 bg-black/40 flex items-center justify-center p-6">
             <Card className="w-full max-w-xl p-6 space-y-4">
               <h3 className="text-xl font-black text-gray-900">
-                {liveActivityType === 'poll' ? 'Стартирай live анкета' : liveActivityType === 'wordcloud' ? 'Стартирай live облак от думи' : 'Стартирай live свободен отговор'}
+                {liveActivityType === 'poll'
+                  ? 'Стартирай live анкета'
+                  : liveActivityType === 'wordcloud'
+                    ? 'Стартирай live облак от думи'
+                    : liveActivityType === 'free-response'
+                      ? 'Стартирай live свободен отговор'
+                      : 'Стартирай live бяла дъска'}
               </h3>
               <input
                 className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:border-indigo-500 focus:ring-0"
@@ -3215,7 +3225,7 @@ const HostView = ({ user }: { user: User }) => {
                     </span>
                   ))}
                 </div>
-              ) : (
+              ) : liveActivity.type === 'free-response' ? (
                 <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                   {(liveActivity.responses || []).map((item, idx) => (
                     <div key={`${item.value}-${idx}`} className="flex items-start justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
@@ -3225,6 +3235,17 @@ const HostView = ({ user }: { user: User }) => {
                   ))}
                   {(liveActivity.responses || []).length === 0 && (
                     <p className="text-sm text-gray-400 italic">Все още няма изпратени отговори.</p>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
+                  {(liveActivity.drawings || []).map((item) => (
+                    <div key={item.id} className="rounded-xl border border-gray-200 bg-white p-1">
+                      <img src={item.value} alt="Student drawing" className="w-full h-24 object-contain rounded-lg bg-white" />
+                    </div>
+                  ))}
+                  {(liveActivity.drawings || []).length === 0 && (
+                    <p className="text-sm text-gray-400 italic col-span-3">Все още няма изпратени рисунки.</p>
                   )}
                 </div>
               )}
@@ -3672,6 +3693,8 @@ const StudentView = () => {
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const whiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveWhiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const liveWhiteboardDrawingRef = useRef(false);
   const navigate = useNavigate();
 
 
@@ -3805,6 +3828,76 @@ const StudentView = () => {
     setLiveActivitySubmitted(true);
   };
 
+  const initializeLiveWhiteboardCanvas = () => {
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (!canvas) return;
+    if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+    }
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#4f46e5';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  };
+
+  const getLiveWhiteboardPoint = (event: any) => {
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    if (event.touches && event.touches.length > 0) {
+      return {
+        x: event.touches[0].clientX - rect.left,
+        y: event.touches[0].clientY - rect.top
+      };
+    }
+    return {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
+    };
+  };
+
+  const startLiveWhiteboardDraw = (event: any) => {
+    event.preventDefault();
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (!canvas || liveActivitySubmitted) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const point = getLiveWhiteboardPoint(event);
+    liveWhiteboardDrawingRef.current = true;
+    ctx.beginPath();
+    ctx.moveTo(point.x, point.y);
+  };
+
+  const moveLiveWhiteboardDraw = (event: any) => {
+    event.preventDefault();
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (!canvas || !liveWhiteboardDrawingRef.current || liveActivitySubmitted) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const point = getLiveWhiteboardPoint(event);
+    ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+  };
+
+  const stopLiveWhiteboardDraw = () => {
+    liveWhiteboardDrawingRef.current = false;
+  };
+
+  const clearLiveWhiteboard = () => {
+    initializeLiveWhiteboardCanvas();
+  };
+
+  const submitLiveWhiteboard = () => {
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (!canvas) return;
+    submitLiveActivityResponse(canvas.toDataURL('image/png'));
+  };
+
   const toggleMulti = (idx: number) => {
     setMultiResponses(prev => 
       prev.includes(idx) ? prev.filter(i => i !== idx) : [...prev, idx]
@@ -3880,6 +3973,11 @@ const StudentView = () => {
       });
     }
   }, [currentSlide]);
+
+  useEffect(() => {
+    if (liveActivity?.type !== 'whiteboard' || liveActivitySubmitted) return;
+    requestAnimationFrame(() => initializeLiveWhiteboardCanvas());
+  }, [liveActivity, liveActivitySubmitted]);
 
   if (status === 'closed') {
     return (
@@ -4000,6 +4098,28 @@ const StudentView = () => {
                       {option}
                     </button>
                   ))}
+                </div>
+              ) : liveActivity.type === 'whiteboard' ? (
+                <div className="space-y-3">
+                  <canvas
+                    ref={liveWhiteboardCanvasRef}
+                    className={`w-full h-52 rounded-xl border-2 border-indigo-200 bg-white ${liveActivitySubmitted ? 'opacity-70' : 'cursor-crosshair'}`}
+                    onMouseDown={startLiveWhiteboardDraw}
+                    onMouseMove={moveLiveWhiteboardDraw}
+                    onMouseUp={stopLiveWhiteboardDraw}
+                    onMouseLeave={stopLiveWhiteboardDraw}
+                    onTouchStart={startLiveWhiteboardDraw}
+                    onTouchMove={moveLiveWhiteboardDraw}
+                    onTouchEnd={stopLiveWhiteboardDraw}
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <Button className="px-4 py-2" variant="secondary" disabled={liveActivitySubmitted} onClick={clearLiveWhiteboard}>
+                      Изчисти
+                    </Button>
+                    <Button className="px-4 py-2" disabled={liveActivitySubmitted} onClick={submitLiveWhiteboard}>
+                      Изпрати рисунка
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <div className="flex items-center gap-2">

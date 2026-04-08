@@ -180,7 +180,7 @@ const rooms = new Map<string, {
   }>;
   liveActivity: null | {
     id: string;
-    type: 'poll' | 'wordcloud' | 'free-response';
+    type: 'poll' | 'wordcloud' | 'free-response' | 'whiteboard';
     question: string;
     options?: string[];
     responses: Record<string, string>;
@@ -192,7 +192,7 @@ const getConnectedStudentsCount = (room: { students: Map<string, { connected: bo
 
 const buildLiveActivityPayload = (activity: null | {
   id: string;
-  type: 'poll' | 'wordcloud' | 'free-response';
+  type: 'poll' | 'wordcloud' | 'free-response' | 'whiteboard';
   question: string;
   options?: string[];
   responses: Record<string, string>;
@@ -231,6 +231,22 @@ const buildLiveActivityPayload = (activity: null | {
       type: activity.type,
       question: activity.question,
       responses,
+      totalResponses: Object.keys(activity.responses).length
+    };
+  }
+
+  if (activity.type === 'whiteboard') {
+    const drawings = Object.values(activity.responses)
+      .map((value) => String(value || '').trim())
+      .filter((value) => value.startsWith('data:image/'))
+      .slice(-24)
+      .map((value, idx) => ({ id: `drawing-${idx}`, value }));
+
+    return {
+      id: activity.id,
+      type: activity.type,
+      question: activity.question,
+      drawings,
       totalResponses: Object.keys(activity.responses).length
     };
   }
@@ -890,7 +906,7 @@ wss.on("connection", (ws) => {
           const room = rooms.get(currentRoomPin);
           if (!room || room.host !== ws) break;
 
-          const allowedActivityTypes = new Set(['poll', 'wordcloud', 'free-response']);
+          const allowedActivityTypes = new Set(['poll', 'wordcloud', 'free-response', 'whiteboard']);
           const activityType = allowedActivityTypes.has(message.activityType) ? message.activityType : 'wordcloud';
           const question = String(message.question || '').trim();
           if (!question) {
