@@ -3113,20 +3113,44 @@ const HostView = ({ user }: { user: User }) => {
             <Users className="w-4 h-4" /> Класация
           </Button>
           {!liveActivity ? (
-            <>
-              <Button variant="secondary" onClick={() => { setLiveActivityType('poll'); setShowLiveComposer(true); }}>
-                <BarChart3 className="w-4 h-4" /> Анкета Live
-              </Button>
-              <Button variant="secondary" onClick={() => { setLiveActivityType('wordcloud'); setShowLiveComposer(true); }}>
-                <MessageSquare className="w-4 h-4" /> Облак от думи
-              </Button>
-              <Button variant="secondary" onClick={() => { setLiveActivityType('free-response'); setShowLiveComposer(true); }}>
-                <Type className="w-4 h-4" /> Свободен отговор
-              </Button>
-              <Button variant="secondary" onClick={() => { setLiveActivityType('whiteboard'); setShowLiveComposer(true); }}>
-                <Palette className="w-4 h-4" /> Бяла дъска
-              </Button>
-            </>
+            <div className="flex items-center gap-2 px-2 py-1 rounded-2xl border border-indigo-100 bg-indigo-50/60">
+              <button
+                type="button"
+                title="Анкета Live"
+                aria-label="Анкета Live"
+                onClick={() => { setLiveActivityType('poll'); setShowLiveComposer(true); }}
+                className="w-11 h-11 rounded-xl border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100 transition-all flex items-center justify-center"
+              >
+                <BarChart3 className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                title="Облак от думи"
+                aria-label="Облак от думи"
+                onClick={() => { setLiveActivityType('wordcloud'); setShowLiveComposer(true); }}
+                className="w-11 h-11 rounded-xl border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100 transition-all flex items-center justify-center"
+              >
+                <MessageSquare className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                title="Свободен отговор"
+                aria-label="Свободен отговор"
+                onClick={() => { setLiveActivityType('free-response'); setShowLiveComposer(true); }}
+                className="w-11 h-11 rounded-xl border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100 transition-all flex items-center justify-center"
+              >
+                <Type className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                title="Бяла дъска"
+                aria-label="Бяла дъска"
+                onClick={() => { setLiveActivityType('whiteboard'); setShowLiveComposer(true); }}
+                className="w-11 h-11 rounded-xl border border-indigo-200 bg-white text-indigo-700 hover:bg-indigo-100 transition-all flex items-center justify-center"
+              >
+                <Palette className="w-5 h-5" />
+              </button>
+            </div>
           ) : (
             <Button variant="danger" onClick={endLiveActivity}>
               <X className="w-4 h-4" /> Спри Live активност
@@ -3253,26 +3277,12 @@ const HostView = ({ user }: { user: User }) => {
           </div>
         )}
 
-        {atRiskInsights.atRiskCount > 0 && !showLeaderboard && (
-          <div className="absolute right-12 top-12 z-20 w-80 bg-amber-50/95 border border-amber-100 shadow-xl rounded-3xl p-5">
-            <h4 className="text-sm font-black text-amber-800 uppercase tracking-widest mb-2">⚠ Рискови ученици ({atRiskInsights.atRiskCount})</h4>
-            <div className="space-y-2">
-              {atRiskInsights.atRiskList.map((student: any) => (
-                <div key={student.id} className="p-3 rounded-xl bg-white border border-amber-100">
-                  <div className="text-sm font-bold text-gray-900">{student.name}</div>
-                  <div className="text-xs text-amber-700 font-semibold">{student.signals.join(', ')}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {showLeaderboard && (
           <motion.div 
             initial={{ x: 300, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: 300, opacity: 0 }}
-            className="absolute right-12 top-12 bottom-12 w-80 bg-white shadow-2xl rounded-3xl p-8 z-20 border border-gray-100"
+            className="absolute right-12 top-12 bottom-12 w-96 bg-white shadow-2xl rounded-3xl p-8 z-20 border border-gray-100 overflow-y-auto"
           >
             <h3 className="text-2xl font-black mb-8 flex items-center gap-2">
               <Users className="text-indigo-600" /> Топ 5
@@ -3297,6 +3307,22 @@ const HostView = ({ user }: { user: User }) => {
                 );
               })}
             </div>
+
+            {atRiskInsights.atRiskCount > 0 && (
+              <div className="mt-8 bg-amber-50 border border-amber-100 rounded-2xl p-4">
+                <h4 className="text-xs font-black text-amber-800 uppercase tracking-widest mb-3">
+                  ⚠ Рискови ученици ({atRiskInsights.atRiskCount})
+                </h4>
+                <div className="space-y-2">
+                  {atRiskInsights.atRiskList.map((student: any) => (
+                    <div key={student.id} className="p-3 rounded-xl bg-white border border-amber-100">
+                      <div className="text-sm font-bold text-gray-900">{student.name}</div>
+                      <div className="text-xs text-amber-700 font-semibold">{student.signals.join(', ')}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 
