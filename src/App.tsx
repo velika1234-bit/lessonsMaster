@@ -3822,6 +3822,7 @@ const StudentView = () => {
   }, [searchParams, navigate]);
 
   const [multiResponses, setMultiResponses] = useState<number[]>([]);
+  const [shuffledQuizOptions, setShuffledQuizOptions] = useState<Array<{ option: any; originalIndex: number }>>([]);
   const [matchingConnections, setMatchingConnections] = useState<Record<string, string>>({});
   const [selectedLeft, setSelectedLeft] = useState<string | null>(null);
   const [orderingResponse, setOrderingResponse] = useState<{ id: string; text: string }[]>([]);
@@ -3960,6 +3961,18 @@ const StudentView = () => {
   };
 
   useEffect(() => {
+    if (currentSlide?.type === 'quiz-single' || currentSlide?.type === 'quiz-multi') {
+      const options = Array.isArray(currentSlide.content.options)
+        ? currentSlide.content.options.map((option: any, originalIndex: number) => ({ option, originalIndex }))
+        : [];
+      for (let i = options.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [options[i], options[j]] = [options[j], options[i]];
+      }
+      setShuffledQuizOptions(options);
+    } else {
+      setShuffledQuizOptions([]);
+    }
     if (currentSlide?.type === 'labeling') {
       setLabelPositions({});
     }
@@ -4221,7 +4234,24 @@ const StudentView = () => {
               <p className="text-lg italic">Вижте екрана на учителя за съдържанието.</p>
             </div>
           </div>
-        ) : (currentSlide.type === 'quiz-single' || currentSlide.type === 'boolean') ? (
+        ) : currentSlide.type === 'quiz-single' ? (
+          <div className="grid grid-cols-1 gap-4 flex-1">
+            {(shuffledQuizOptions.length > 0 ? shuffledQuizOptions : (currentSlide.content.options || []).map((opt: any, originalIndex: number) => ({ option: opt, originalIndex }))).map(({ option, originalIndex }) => (
+              <button
+                key={originalIndex}
+                disabled={submitted}
+                onClick={() => submitResponse(originalIndex)}
+                className={`h-20 text-xl font-bold rounded-2xl border-b-4 transition-all active:translate-y-1 active:border-b-0 ${
+                  submitted 
+                    ? 'bg-gray-100 border-gray-200 text-gray-400' 
+                    : 'bg-white border-gray-200 hover:bg-indigo-50 hover:border-indigo-200 text-gray-800 shadow-sm'
+                }`}
+              >
+                {option.text}
+              </button>
+            ))}
+          </div>
+        ) : currentSlide.type === 'boolean' ? (
           <div className="grid grid-cols-1 gap-4 flex-1">
             {currentSlide.content.options.map((opt: any, i: number) => (
               <button
@@ -4241,20 +4271,20 @@ const StudentView = () => {
         ) : currentSlide.type === 'quiz-multi' ? (
           <div className="flex flex-col gap-4 flex-1">
             <div className="grid grid-cols-1 gap-4">
-              {currentSlide.content.options.map((opt: any, i: number) => (
+              {(shuffledQuizOptions.length > 0 ? shuffledQuizOptions : (currentSlide.content.options || []).map((opt: any, originalIndex: number) => ({ option: opt, originalIndex }))).map(({ option, originalIndex }) => (
                 <button
-                  key={i}
+                  key={originalIndex}
                   disabled={submitted}
-                  onClick={() => toggleMulti(i)}
+                  onClick={() => toggleMulti(originalIndex)}
                   className={`h-20 text-xl font-bold rounded-2xl border-b-4 transition-all ${
                     submitted 
                       ? 'bg-gray-100 border-gray-200 text-gray-400' 
-                      : multiResponses.includes(i)
+                      : multiResponses.includes(originalIndex)
                         ? 'bg-indigo-600 border-indigo-800 text-white'
                         : 'bg-white border-gray-200 text-gray-800 shadow-sm'
                   }`}
                 >
-                  {opt.text}
+                  {option.text}
                 </button>
               ))}
             </div>
