@@ -1011,6 +1011,8 @@ wss.on("connection", (ws) => {
                 const slidePoints = currentSlide.points ?? 1;
                 let isCorrect = false;
                 let isGraded = true;
+                let pointsEarned = 0;
+                let feedbackMessage: string | undefined;
 
                 if (currentSlide.type === 'quiz-single' || currentSlide.type === 'boolean') {
                   const correctIdx = content.options.findIndex((o: any) => o.isCorrect);
@@ -1056,8 +1058,23 @@ wss.on("connection", (ws) => {
                       correctCount++;
                     }
                   });
-                  if (pairs.length > 0 && correctCount === pairs.length) {
-                    isCorrect = true;
+                  if (pairs.length > 0) {
+                    const ratio = correctCount / pairs.length;
+                    pointsEarned = Number((slidePoints * ratio).toFixed(2));
+                    isCorrect = correctCount === pairs.length;
+                    feedbackMessage = `Верни връзки: ${correctCount}/${pairs.length}.`;
+                  }
+                } else if (currentSlide.type === 'ordering') {
+                  const items = content.orderingItems || [];
+                  const responseOrder = Array.isArray(message.response) ? message.response : [];
+                  if (items.length > 0 && responseOrder.length === items.length) {
+                    isCorrect = items.every((item: any, idx: number) => responseOrder[idx] === item.id);
+                  }
+                } else if (currentSlide.type === 'categorization') {
+                  const items = content.categoryItems || [];
+                  const responseMap = message.response || {};
+                  if (items.length > 0) {
+                    isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
                   }
                 } else if (currentSlide.type === 'ordering') {
                   const items = content.orderingItems || [];
@@ -1089,8 +1106,15 @@ wss.on("connection", (ws) => {
                   isGraded = false;
                 }
 
-                if (isGraded && isCorrect) {
-                  student.score += slidePoints;
+                if (isGraded) {
+                  if (currentSlide.type === 'matching') {
+                    if (pointsEarned > 0) {
+                      student.score = Number((student.score + pointsEarned).toFixed(2));
+                    }
+                  } else if (isCorrect) {
+                    pointsEarned = slidePoints;
+                    student.score += slidePoints;
+                  }
                 }
 
                 // Send feedback to student
@@ -1098,9 +1122,9 @@ wss.on("connection", (ws) => {
                   ws.send(JSON.stringify({
                     type: "FEEDBACK",
                     isCorrect: isGraded ? isCorrect : null,
-                    pointsEarned: (isGraded && isCorrect) ? slidePoints : 0,
+                    pointsEarned: isGraded ? pointsEarned : 0,
                     totalScore: student.score,
-                    message: isGraded ? undefined : "Този отговор е без автоматично точкуване."
+                    message: isGraded ? feedbackMessage : "Този отговор е без автоматично точкуване."
                   }));
                 }
               }
