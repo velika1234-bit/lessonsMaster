@@ -4534,53 +4534,15 @@ const StudentView = () => {
                 onClick={() => {
                   const canvas = whiteboardCanvasRef.current;
                   if (!canvas) return;
-                  const exportCanvas = document.createElement('canvas');
-                  exportCanvas.width = canvas.width || canvas.clientWidth;
-                  exportCanvas.height = canvas.height || canvas.clientHeight;
-                  const exportCtx = exportCanvas.getContext('2d');
-                  if (!exportCtx) return;
-
-                  const submitCanvasAsImage = (sourceCanvas: HTMLCanvasElement) => {
-                    try {
-                      submitResponse({
-                        drawingDataUrl: sourceCanvas.toDataURL('image/jpeg', 0.9),
-                        backgroundUrl: currentSlide.content.imageUrl || undefined
-                      });
-                    } catch (err) {
-                      console.error('Whiteboard export failed', err);
-                      if (sourceCanvas !== canvas) {
-                        try {
-                          submitResponse({
-                            drawingDataUrl: canvas.toDataURL('image/jpeg', 0.9),
-                            backgroundUrl: currentSlide.content.imageUrl || undefined
-                          });
-                          return;
-                        } catch (fallbackErr) {
-                          console.error('Whiteboard fallback export failed', fallbackErr);
-                        }
-                      }
-                      alert('Не успяхме да изпратим рисунката. Опитайте отново.');
-                    }
-                  };
-
-                  if (currentSlide.content.imageUrl) {
-                    const bg = new Image();
-                    bg.crossOrigin = 'anonymous';
-                    bg.onload = () => {
-                      exportCtx.drawImage(bg, 0, 0, exportCanvas.width, exportCanvas.height);
-                      exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
-                      submitCanvasAsImage(exportCanvas);
-                    };
-                    bg.onerror = () => {
-                      exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
-                      submitCanvasAsImage(exportCanvas);
-                    };
-                    bg.src = currentSlide.content.imageUrl;
-                    return;
+                  try {
+                    submitResponse({
+                      drawingDataUrl: canvas.toDataURL('image/png'),
+                      backgroundUrl: currentSlide.content.imageUrl || undefined
+                    });
+                  } catch (err) {
+                    console.error('Whiteboard export failed', err);
+                    alert('Не успяхме да изпратим рисунката. Опитайте отново.');
                   }
-
-                  exportCtx.drawImage(canvas, 0, 0, exportCanvas.width, exportCanvas.height);
-                  submitCanvasAsImage(exportCanvas);
                 }}
               >
                 Изпрати рисунката
