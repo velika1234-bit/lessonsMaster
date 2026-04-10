@@ -3304,7 +3304,9 @@ const HostView = ({ user }: { user: User }) => {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-widest text-indigo-500">Live активност</span>
                 <span className="text-sm font-bold text-gray-500">
-                  {liveActivity.totalResponses}/{students.length} • Чакат: {unansweredLiveStudents}
+                  {students.length > 0
+                    ? `${liveActivity.totalResponses}/${students.length} • Чакат: ${unansweredLiveStudents}`
+                    : `${liveActivity.totalResponses} отговора`}
                 </span>
               </div>
               <h4 className="text-lg font-black text-gray-900">{liveActivity.question}</h4>
