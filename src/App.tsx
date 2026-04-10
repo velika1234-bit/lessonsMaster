@@ -3640,12 +3640,13 @@ const HostView = ({ user }: { user: User }) => {
                   {whiteboardSubmissions
                     .map(({ sid, drawingDataUrl, backgroundUrl }, index) => {
                       const studentName = students.find((s) => s.id === sid)?.name || `Ученик ${index + 1}`;
+                      const effectiveBackgroundUrl = backgroundUrl || currentSlide.content.imageUrl || undefined;
                       return (
                         <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
                           <div className="relative w-full aspect-square rounded-lg border border-gray-100 overflow-hidden bg-white">
-                            {backgroundUrl && (
+                            {effectiveBackgroundUrl && (
                               <img
-                                src={backgroundUrl}
+                                src={effectiveBackgroundUrl}
                                 alt=""
                                 className="absolute inset-0 w-full h-full object-cover opacity-75"
                               />
