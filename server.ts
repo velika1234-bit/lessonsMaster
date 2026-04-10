@@ -971,6 +971,33 @@ wss.on("connection", (ws) => {
           break;
         }
 
+        case "HOST_RESET_ACTIVITY_RESPONSES": {
+          if (!currentRoomPin) break;
+          const room = rooms.get(currentRoomPin);
+          if (!room || room.host !== ws || !room.liveActivity) break;
+
+          room.liveActivity.responses = {};
+          const hostUpdate = buildLiveActivityPayload(room.liveActivity);
+          if (room.host.readyState === WebSocket.OPEN) {
+            room.host.send(JSON.stringify({ type: 'LIVE_ACTIVITY_UPDATE', activity: hostUpdate }));
+          }
+
+          room.students.forEach((student) => {
+            if (student.ws?.readyState === WebSocket.OPEN) {
+              student.ws.send(JSON.stringify({
+                type: 'LIVE_ACTIVITY_START',
+                activity: {
+                  id: room.liveActivity?.id,
+                  type: room.liveActivity?.type,
+                  question: room.liveActivity?.question,
+                  options: room.liveActivity?.options || []
+                }
+              }));
+            }
+          });
+          break;
+        }
+
         case "STUDENT_ACTIVITY_RESPONSE": {
           if (!currentRoomPin) break;
           const room = rooms.get(currentRoomPin);

@@ -2439,6 +2439,8 @@ const HostView = ({ user }: { user: User }) => {
   const [liveActivityType, setLiveActivityType] = useState<'poll' | 'wordcloud' | 'free-response' | 'whiteboard'>('poll');
   const [liveQuestion, setLiveQuestion] = useState('');
   const [liveOptionsText, setLiveOptionsText] = useState('Да\nНе');
+  const [selectedLiveDrawingId, setSelectedLiveDrawingId] = useState<string | null>(null);
+  const [pinnedLiveDrawingId, setPinnedLiveDrawingId] = useState<string | null>(null);
   const [manualGradePoints, setManualGradePoints] = useState(1);
   const [manualAwardByResponseKey, setManualAwardByResponseKey] = useState<Record<string, number>>({});
   const [manualBonusByStudent, setManualBonusByStudent] = useState<Record<string, number>>({});
@@ -2976,6 +2978,42 @@ const HostView = ({ user }: { user: User }) => {
     setLiveActivity(null);
   };
 
+  const resetLiveActivityResponses = () => {
+    if (!pin || !ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    ws.current.send(JSON.stringify({ type: 'HOST_RESET_ACTIVITY_RESPONSES', pin }));
+  };
+
+  const liveWhiteboardDrawings = liveActivity?.type === 'whiteboard' ? (liveActivity.drawings || []) : [];
+  const selectedLiveDrawing = liveWhiteboardDrawings.find((drawing) => drawing.id === selectedLiveDrawingId) || null;
+  const pinnedLiveDrawing = liveWhiteboardDrawings.find((drawing) => drawing.id === pinnedLiveDrawingId) || null;
+  const selectedLiveDrawingIndex = selectedLiveDrawing
+    ? liveWhiteboardDrawings.findIndex((drawing) => drawing.id === selectedLiveDrawing.id)
+    : -1;
+  const unansweredLiveStudents = liveActivity ? Math.max(0, students.length - liveActivity.totalResponses) : 0;
+
+  useEffect(() => {
+    if (!liveActivity || liveActivity.type !== 'whiteboard') {
+      setSelectedLiveDrawingId(null);
+      setPinnedLiveDrawingId(null);
+      return;
+    }
+
+    const drawings = liveActivity.drawings || [];
+    if (drawings.length === 0) {
+      setSelectedLiveDrawingId(null);
+      setPinnedLiveDrawingId(null);
+      return;
+    }
+
+    if (!selectedLiveDrawingId || !drawings.some((drawing) => drawing.id === selectedLiveDrawingId)) {
+      setSelectedLiveDrawingId(drawings[0].id);
+    }
+
+    if (pinnedLiveDrawingId && !drawings.some((drawing) => drawing.id === pinnedLiveDrawingId)) {
+      setPinnedLiveDrawingId(null);
+    }
+  }, [liveActivity, selectedLiveDrawingId, pinnedLiveDrawingId]);
+
   if (!currentSlide) {
     const joinUrl = `${window.location.origin}/join?pin=${pin}`;
     
@@ -3265,7 +3303,11 @@ const HostView = ({ user }: { user: User }) => {
             <Card className="p-5 space-y-4 shadow-xl border border-indigo-100 bg-white/95 backdrop-blur">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-widest text-indigo-500">Live активност</span>
-                <span className="text-sm font-bold text-gray-500">{liveActivity.totalResponses} отговора</span>
+                <span className="text-sm font-bold text-gray-500">
+                  {students.length > 0
+                    ? `${liveActivity.totalResponses}/${students.length} • Чакат: ${unansweredLiveStudents}`
+                    : `${liveActivity.totalResponses} отговора`}
+                </span>
               </div>
               <h4 className="text-lg font-black text-gray-900">{liveActivity.question}</h4>
               {liveActivity.type === 'poll' ? (
@@ -3307,15 +3349,79 @@ const HostView = ({ user }: { user: User }) => {
                   )}
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1">
-                  {(liveActivity.drawings || []).map((item) => (
-                    <div key={item.id} className="rounded-xl border border-gray-200 bg-white p-1">
-                      <img src={item.value} alt="Student drawing" className="w-full h-24 object-contain rounded-lg bg-white" />
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-bold uppercase tracking-widest text-gray-500">
+                      Рунд рисунки ({liveWhiteboardDrawings.length})
+                    </p>
+                    <Button className="px-3 py-1.5 text-xs" variant="secondary" onClick={resetLiveActivityResponses}>
+                      Нов рунд
+                    </Button>
+                  </div>
+
+                  {selectedLiveDrawing && (
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-2 space-y-2">
+                      <img src={selectedLiveDrawing.value} alt="Избрана рисунка" className="w-full h-44 object-contain rounded-lg bg-white" />
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1">
+                          <Button
+                            className="px-2 py-1 text-xs"
+                            variant="secondary"
+                            disabled={selectedLiveDrawingIndex <= 0}
+                            onClick={() => {
+                              if (selectedLiveDrawingIndex <= 0) return;
+                              setSelectedLiveDrawingId(liveWhiteboardDrawings[selectedLiveDrawingIndex - 1].id);
+                            }}
+                          >
+                            <ChevronLeft className="w-3 h-3" />
+                          </Button>
+                          <span className="text-xs font-semibold text-gray-600">
+                            {selectedLiveDrawingIndex + 1}/{liveWhiteboardDrawings.length}
+                          </span>
+                          <Button
+                            className="px-2 py-1 text-xs"
+                            variant="secondary"
+                            disabled={selectedLiveDrawingIndex === -1 || selectedLiveDrawingIndex >= liveWhiteboardDrawings.length - 1}
+                            onClick={() => {
+                              if (selectedLiveDrawingIndex === -1 || selectedLiveDrawingIndex >= liveWhiteboardDrawings.length - 1) return;
+                              setSelectedLiveDrawingId(liveWhiteboardDrawings[selectedLiveDrawingIndex + 1].id);
+                            }}
+                          >
+                            <ChevronRight className="w-3 h-3" />
+                          </Button>
+                        </div>
+                        <Button
+                          className="px-3 py-1 text-xs"
+                          variant={pinnedLiveDrawingId === selectedLiveDrawing.id ? 'danger' : 'secondary'}
+                          onClick={() => setPinnedLiveDrawingId((prev) => (prev === selectedLiveDrawing.id ? null : selectedLiveDrawing.id))}
+                        >
+                          {pinnedLiveDrawingId === selectedLiveDrawing.id ? 'Откачи' : 'Закрепи'}
+                        </Button>
+                      </div>
                     </div>
-                  ))}
-                  {(liveActivity.drawings || []).length === 0 && (
-                    <p className="text-sm text-gray-400 italic col-span-3">Все още няма изпратени рисунки.</p>
                   )}
+
+                  {pinnedLiveDrawing && (
+                    <div className="text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
+                      📌 Закрепена рисунка за обсъждане.
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-3 gap-2 max-h-52 overflow-y-auto pr-1">
+                    {liveWhiteboardDrawings.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setSelectedLiveDrawingId(item.id)}
+                        className={`rounded-xl border bg-white p-1 transition ${selectedLiveDrawingId === item.id ? 'border-indigo-500 ring-2 ring-indigo-200' : 'border-gray-200 hover:border-indigo-300'}`}
+                      >
+                        <img src={item.value} alt="Student drawing" className="w-full h-24 object-contain rounded-lg bg-white" />
+                      </button>
+                    ))}
+                    {liveWhiteboardDrawings.length === 0 && (
+                      <p className="text-sm text-gray-400 italic col-span-3">Все още няма изпратени рисунки.</p>
+                    )}
+                  </div>
                 </div>
               )}
             </Card>
