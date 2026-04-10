@@ -101,6 +101,21 @@ const getYouTubeEmbedUrl = (url: string) => {
   return videoId ? `https://www.youtube.com/embed/${videoId}` : url;
 };
 
+const parseWhiteboardSubmission = (response: any): { drawingDataUrl: string; backgroundUrl?: string } | null => {
+  if (typeof response === 'string' && response.startsWith('data:image/')) {
+    return { drawingDataUrl: response };
+  }
+
+  if (response && typeof response === 'object' && typeof response.drawingDataUrl === 'string' && response.drawingDataUrl.startsWith('data:image/')) {
+    return {
+      drawingDataUrl: response.drawingDataUrl,
+      backgroundUrl: typeof response.backgroundUrl === 'string' ? response.backgroundUrl : undefined
+    };
+  }
+
+  return null;
+};
+
 const RISK_THRESHOLDS = {
   lowActivityRate: 0.5,
   lowAccuracyRate: 0.5,
@@ -3599,6 +3614,17 @@ const HostView = ({ user }: { user: User }) => {
             )}
             {currentSlide.type === 'whiteboard' && (
               <div className="w-full flex-1 flex flex-col gap-4">
+                {(() => {
+                  const whiteboardSubmissions = Object.entries(responses)
+                    .map(([sid, resp]) => {
+                      const parsed = parseWhiteboardSubmission(resp);
+                      if (!parsed) return null;
+                      return { sid, ...parsed };
+                    })
+                    .filter((entry): entry is { sid: string; drawingDataUrl: string; backgroundUrl?: string } => !!entry);
+
+                  return (
+                    <>
                 <div className="relative w-full aspect-video bg-white rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden">
                   {currentSlide.content.imageUrl && (
                     <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-20" alt="BG" />
@@ -3606,32 +3632,43 @@ const HostView = ({ user }: { user: User }) => {
                   <div className="text-center text-gray-400 z-10">
                     <Edit2 className="w-12 h-12 mx-auto mb-4 opacity-20" />
                     <p>Учениците рисуват в момента...</p>
-                    <p className="text-sm mt-2">{Object.keys(responses).length} изпратени рисунки</p>
+                    <p className="text-sm mt-2">{whiteboardSubmissions.length} изпратени рисунки</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 max-h-[280px] overflow-y-auto">
-                  {Object.entries(responses)
-                    .filter(([, resp]) => typeof resp === 'string' && resp.startsWith('data:image/'))
-                    .map(([sid, resp], index) => {
+                  {whiteboardSubmissions
+                    .map(({ sid, drawingDataUrl, backgroundUrl }, index) => {
                       const studentName = students.find((s) => s.id === sid)?.name || `Ученик ${index + 1}`;
                       return (
                         <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
-                          <img
-                            src={resp as string}
-                            alt={`Рисунка от ${studentName}`}
-                            className="w-full aspect-square object-cover rounded-lg border border-gray-100"
-                          />
+                          <div className="relative w-full aspect-square rounded-lg border border-gray-100 overflow-hidden bg-white">
+                            {backgroundUrl && (
+                              <img
+                                src={backgroundUrl}
+                                alt=""
+                                className="absolute inset-0 w-full h-full object-cover opacity-75"
+                              />
+                            )}
+                            <img
+                              src={drawingDataUrl}
+                              alt={`Рисунка от ${studentName}`}
+                              className="absolute inset-0 w-full h-full object-cover"
+                            />
+                          </div>
                           <p className="mt-2 text-xs font-semibold text-gray-600 truncate" title={studentName}>{studentName}</p>
                         </div>
                       );
                     })}
-                  {Object.values(responses).filter((resp) => typeof resp === 'string' && resp.startsWith('data:image/')).length === 0 && (
+                  {whiteboardSubmissions.length === 0 && (
                     <div className="col-span-full text-center py-6 text-gray-400 font-medium">
                       Все още няма изпратени рисунки.
                     </div>
                   )}
                 </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -4493,53 +4530,7 @@ const StudentView = () => {
             {!submitted && (
               <Button
                 className="h-16 text-xl"
-                onClick={async () => {
-                  const captureStudentScreen = async () => {
-                    if (!navigator.mediaDevices?.getDisplayMedia) return null;
-
-                    let stream: MediaStream | null = null;
-                    try {
-                      stream = await navigator.mediaDevices.getDisplayMedia({
-                        video: {
-                          displaySurface: 'browser',
-                        } as MediaTrackConstraints,
-                        audio: false,
-                      });
-
-                      const track = stream.getVideoTracks()[0];
-                      if (!track) return null;
-
-                      const video = document.createElement('video');
-                      video.srcObject = stream;
-                      video.playsInline = true;
-
-                      await video.play();
-
-                      const screenshotCanvas = document.createElement('canvas');
-                      screenshotCanvas.width = video.videoWidth;
-                      screenshotCanvas.height = video.videoHeight;
-                      const screenshotCtx = screenshotCanvas.getContext('2d');
-                      if (!screenshotCtx) return null;
-
-                      screenshotCtx.drawImage(video, 0, 0, screenshotCanvas.width, screenshotCanvas.height);
-                      video.pause();
-                      video.srcObject = null;
-
-                      return screenshotCanvas.toDataURL('image/jpeg', 0.9);
-                    } catch (error) {
-                      console.warn('Screen capture denied or unavailable, using whiteboard export fallback.', error);
-                      return null;
-                    } finally {
-                      stream?.getTracks().forEach((track) => track.stop());
-                    }
-                  };
-
-                  const screenImage = await captureStudentScreen();
-                  if (screenImage) {
-                    submitResponse(screenImage);
-                    return;
-                  }
-
+                onClick={() => {
                   const canvas = whiteboardCanvasRef.current;
                   if (!canvas) return;
                   const exportCanvas = document.createElement('canvas');
@@ -4550,12 +4541,18 @@ const StudentView = () => {
 
                   const submitCanvasAsImage = (sourceCanvas: HTMLCanvasElement) => {
                     try {
-                      submitResponse(sourceCanvas.toDataURL('image/jpeg', 0.9));
+                      submitResponse({
+                        drawingDataUrl: sourceCanvas.toDataURL('image/jpeg', 0.9),
+                        backgroundUrl: currentSlide.content.imageUrl || undefined
+                      });
                     } catch (err) {
                       console.error('Whiteboard export failed', err);
                       if (sourceCanvas !== canvas) {
                         try {
-                          submitResponse(canvas.toDataURL('image/jpeg', 0.9));
+                          submitResponse({
+                            drawingDataUrl: canvas.toDataURL('image/jpeg', 0.9),
+                            backgroundUrl: currentSlide.content.imageUrl || undefined
+                          });
                           return;
                         } catch (fallbackErr) {
                           console.error('Whiteboard fallback export failed', fallbackErr);

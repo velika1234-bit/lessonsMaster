@@ -1076,18 +1076,6 @@ wss.on("connection", (ws) => {
                   if (items.length > 0) {
                     isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
                   }
-                } else if (currentSlide.type === 'ordering') {
-                  const items = content.orderingItems || [];
-                  const responseOrder = Array.isArray(message.response) ? message.response : [];
-                  if (items.length > 0 && responseOrder.length === items.length) {
-                    isCorrect = items.every((item: any, idx: number) => responseOrder[idx] === item.id);
-                  }
-                } else if (currentSlide.type === 'categorization') {
-                  const items = content.categoryItems || [];
-                  const responseMap = message.response || {};
-                  if (items.length > 0) {
-                    isCorrect = items.every((item: any) => responseMap[item.id] === item.category);
-                  }
                 } else if (currentSlide.type === 'open-question') {
                   const expectedRaw = String(content.expectedAnswer || '').trim();
                   const learnerRaw = typeof message.response === 'string' ? message.response : String(message.response || '');
