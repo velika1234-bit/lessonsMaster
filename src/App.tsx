@@ -2439,6 +2439,10 @@ const HostView = ({ user }: { user: User }) => {
   const [liveActivityType, setLiveActivityType] = useState<'poll' | 'wordcloud' | 'free-response' | 'whiteboard'>('poll');
   const [liveQuestion, setLiveQuestion] = useState('');
   const [liveOptionsText, setLiveOptionsText] = useState('Да\nНе');
+  const [manualGradePoints, setManualGradePoints] = useState(1);
+  const [manualAwardByResponseKey, setManualAwardByResponseKey] = useState<Record<string, number>>({});
+  const [manualBonusByStudent, setManualBonusByStudent] = useState<Record<string, number>>({});
+  const [expandedResponse, setExpandedResponse] = useState<{ sid: string; type: 'text' | 'whiteboard'; text?: string; drawingDataUrl?: string; backgroundUrl?: string } | null>(null);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const navigate = useNavigate();
@@ -2510,6 +2514,11 @@ const HostView = ({ user }: { user: User }) => {
 
     setHostOrderingPreview([]);
   }, [currentSlide]);
+
+  useEffect(() => {
+    const defaultPoints = typeof currentSlide?.points === 'number' ? currentSlide.points : 1;
+    setManualGradePoints(Math.max(0, defaultPoints));
+  }, [currentSlide?.id, currentSlide?.points]);
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2855,6 +2864,36 @@ const HostView = ({ user }: { user: User }) => {
     });
   }, [currentSlide, responses]);
 
+  const getManualResponseKey = (studentId: string) => `${currentSlide?.id || 'no-slide'}:${studentId}`;
+
+  const toggleManualGrade = (studentId: string, checked: boolean) => {
+    const key = getManualResponseKey(studentId);
+    if (checked) {
+      const awardedPoints = Number(manualGradePoints) || 0;
+      setManualAwardByResponseKey(prev => ({ ...prev, [key]: awardedPoints }));
+      setManualBonusByStudent(prev => ({ ...prev, [studentId]: Number(((prev[studentId] || 0) + awardedPoints).toFixed(2)) }));
+      return;
+    }
+
+    const previouslyAwarded = manualAwardByResponseKey[key] || 0;
+    setManualAwardByResponseKey(prev => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setManualBonusByStudent(prev => ({ ...prev, [studentId]: Number(((prev[studentId] || 0) - previouslyAwarded).toFixed(2)) }));
+  };
+
+  const sortedLeaderboard = useMemo(() => {
+    return [...leaderboard]
+      .map((student: any) => ({
+        ...student,
+        displayScore: Number(((student.score || 0) + (manualBonusByStudent[student.id] || 0)).toFixed(2))
+      }))
+      .sort((a: any, b: any) => b.displayScore - a.displayScore)
+      .slice(0, 5);
+  }, [leaderboard, manualBonusByStudent]);
+
   const atRiskInsights = useMemo(() => {
     const list = students
       .map((student: any) => {
@@ -3058,27 +3097,18 @@ const HostView = ({ user }: { user: User }) => {
         
         <div className="grid grid-cols-6 gap-4 mb-12">
           <AnimatePresence>
-            {students.map(s => {
-              const riskEntry = atRiskInsights.atRiskList.find((riskStudent: any) => riskStudent.id === s.id);
-              return (
+            {students.map(s => (
                 <motion.div 
                   key={s.id}
                   initial={{ scale: 0, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
                   exit={{ scale: 0, opacity: 0 }}
-                  className={`bg-white/20 p-4 rounded-2xl text-center font-bold flex flex-col items-center gap-2 ${riskEntry ? 'ring-2 ring-amber-300 bg-amber-500/20' : ''}`}
+                  className="bg-white/20 p-4 rounded-2xl text-center font-bold flex flex-col items-center gap-2"
                 >
                   <img src={getAvatarUrl(s.avatarSeed || s.name)} className="w-12 h-12" alt="avatar" />
                   <span className="truncate w-full">{s.name}</span>
-                  {riskEntry && (
-                    <div className="text-[10px] leading-tight">
-                      <span className="inline-block px-2 py-1 rounded-full bg-amber-100 text-amber-700 font-black uppercase tracking-wider">⚠ Риск</span>
-                      <p className="mt-1 text-amber-100 font-semibold">{riskEntry.signals.join(', ')}</p>
-                    </div>
-                  )}
                 </motion.div>
-              );
-            })}
+            ))}
           </AnimatePresence>
         </div>
 
@@ -3303,7 +3333,7 @@ const HostView = ({ user }: { user: User }) => {
               <Users className="text-indigo-600" /> Топ 5
             </h3>
             <div className="space-y-4">
-              {leaderboard.map((s, i) => {
+              {sortedLeaderboard.map((s, i) => {
                 const riskEntry = atRiskInsights.atRiskList.find((student: any) => student.name === s.name);
                 return (
                 <div key={i} className={`flex items-center justify-between p-4 rounded-2xl ${riskEntry ? 'bg-amber-50 border border-amber-100' : 'bg-gray-50'}`}>
@@ -3317,7 +3347,7 @@ const HostView = ({ user }: { user: User }) => {
                       {riskEntry && <span className="text-[10px] font-bold text-amber-700">⚠ Риск: {riskEntry.signals.join(', ')}</span>}
                     </div>
                   </div>
-                  <span className="font-black text-indigo-600">{s.score}</span>
+                  <span className="font-black text-indigo-600">{s.displayScore}</span>
                 </div>
                 );
               })}
@@ -3592,24 +3622,60 @@ const HostView = ({ user }: { user: User }) => {
             )}
 
             {(currentSlide.type === 'open-question' || currentSlide.type === 'free-response') && (
+              <div className="w-full flex flex-col gap-4">
+                <div className="flex items-center justify-end gap-3">
+                  <label className="text-xs font-bold text-gray-500 uppercase">Точки за потвърден отговор</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="w-20 px-2 py-1 rounded-lg border border-gray-200 text-sm font-bold text-indigo-700"
+                    value={manualGradePoints}
+                    onChange={(e) => setManualGradePoints(Math.max(0, parseInt(e.target.value) || 0))}
+                  />
+                </div>
               <div className="w-full grid grid-cols-2 gap-4 overflow-y-auto max-h-[400px] p-4">
                 <AnimatePresence>
-                  {Object.entries(responses).map(([sid, resp]) => (
+                  {Object.entries(responses).map(([sid, resp]) => {
+                    const responseKey = getManualResponseKey(sid);
+                    const isChecked = manualAwardByResponseKey[responseKey] !== undefined;
+                    const studentName = students.find((s) => s.id === sid)?.name || 'Ученик';
+                    return (
                     <motion.div 
                       key={sid}
                       initial={{ scale: 0.8, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
-                      className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-xl font-medium"
+                      className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 text-xl font-medium flex flex-col gap-4"
                     >
-                      {resp}
+                      <div className="text-sm font-bold text-gray-500">{studentName}</div>
+                      <div className="whitespace-pre-wrap">{String(resp)}</div>
+                      <div className="flex items-center justify-between gap-3">
+                        <label className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-700">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300"
+                            checked={isChecked}
+                            onChange={(e) => toggleManualGrade(sid, e.target.checked)}
+                          />
+                          Верен отговор (+{manualGradePoints} т.)
+                        </label>
+                        <Button
+                          variant="ghost"
+                          className="h-10 px-3 text-sm"
+                          onClick={() => setExpandedResponse({ sid, type: 'text', text: String(resp) })}
+                        >
+                          Увеличи
+                        </Button>
+                      </div>
                     </motion.div>
-                  ))}
+                  )})}
                 </AnimatePresence>
                 {Object.keys(responses).length === 0 && (
                   <div className="col-span-2 text-center py-20 text-gray-300 italic">
                     Очакваме отговори...
                   </div>
                 )}
+              </div>
               </div>
             )}
             {currentSlide.type === 'whiteboard' && (
@@ -3625,6 +3691,17 @@ const HostView = ({ user }: { user: User }) => {
 
                   return (
                     <>
+                <div className="flex items-center justify-end gap-3">
+                  <label className="text-xs font-bold text-gray-500 uppercase">Точки за потвърдена рисунка</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    className="w-20 px-2 py-1 rounded-lg border border-gray-200 text-sm font-bold text-indigo-700"
+                    value={manualGradePoints}
+                    onChange={(e) => setManualGradePoints(Math.max(0, parseInt(e.target.value) || 0))}
+                  />
+                </div>
                 <div className="relative w-full aspect-video bg-white rounded-2xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden">
                   {currentSlide.content.imageUrl && (
                     <img src={currentSlide.content.imageUrl} className="absolute inset-0 w-full h-full object-cover opacity-20" alt="BG" />
@@ -3641,8 +3718,10 @@ const HostView = ({ user }: { user: User }) => {
                     .map(({ sid, drawingDataUrl, backgroundUrl }, index) => {
                       const studentName = students.find((s) => s.id === sid)?.name || `Ученик ${index + 1}`;
                       const effectiveBackgroundUrl = backgroundUrl || currentSlide.content.imageUrl || undefined;
+                      const responseKey = getManualResponseKey(sid);
+                      const isChecked = manualAwardByResponseKey[responseKey] !== undefined;
                       return (
-                        <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm">
+                        <div key={sid} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm flex flex-col gap-2">
                           <div className="relative w-full aspect-square rounded-lg border border-gray-100 overflow-hidden bg-white">
                             {effectiveBackgroundUrl && (
                               <img
@@ -3658,6 +3737,22 @@ const HostView = ({ user }: { user: User }) => {
                             />
                           </div>
                           <p className="mt-2 text-xs font-semibold text-gray-600 truncate" title={studentName}>{studentName}</p>
+                          <label className="inline-flex items-center gap-2 text-xs font-semibold text-emerald-700">
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300"
+                              checked={isChecked}
+                              onChange={(e) => toggleManualGrade(sid, e.target.checked)}
+                            />
+                            Вярна рисунка (+{manualGradePoints} т.)
+                          </label>
+                          <Button
+                            variant="ghost"
+                            className="h-9 px-2 text-xs"
+                            onClick={() => setExpandedResponse({ sid, type: 'whiteboard', drawingDataUrl, backgroundUrl: effectiveBackgroundUrl })}
+                          >
+                            Увеличи
+                          </Button>
                         </div>
                       );
                     })}
@@ -3674,6 +3769,50 @@ const HostView = ({ user }: { user: User }) => {
             )}
           </div>
         </Card>
+
+        <AnimatePresence>
+          {expandedResponse && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-6"
+              onClick={() => setExpandedResponse(null)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl p-6"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xl font-black text-gray-900">
+                    {expandedResponse.type === 'whiteboard' ? 'Детайл на рисунка' : 'Детайл на отговор'}
+                  </h3>
+                  <Button variant="ghost" className="h-10 w-10 p-0" onClick={() => setExpandedResponse(null)}>
+                    <X className="w-5 h-5" />
+                  </Button>
+                </div>
+
+                {expandedResponse.type === 'whiteboard' ? (
+                  <div className="relative w-full aspect-video rounded-xl border border-gray-200 overflow-hidden bg-white">
+                    {expandedResponse.backgroundUrl && (
+                      <img src={expandedResponse.backgroundUrl} alt="" className="absolute inset-0 w-full h-full object-contain opacity-80" />
+                    )}
+                    {expandedResponse.drawingDataUrl && (
+                      <img src={expandedResponse.drawingDataUrl} alt="Рисунка" className="absolute inset-0 w-full h-full object-contain" />
+                    )}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-6 max-h-[70vh] overflow-auto whitespace-pre-wrap text-lg leading-relaxed">
+                    {expandedResponse.text}
+                  </div>
+                )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );
