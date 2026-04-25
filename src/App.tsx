@@ -2447,6 +2447,7 @@ const HostView = ({ user }: { user: User }) => {
   const [expandedResponse, setExpandedResponse] = useState<{ sid: string; type: 'text' | 'whiteboard'; text?: string; drawingDataUrl?: string; backgroundUrl?: string } | null>(null);
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
+  const hostReconnectTimerRef = useRef<number | null>(null);
   const navigate = useNavigate();
 
   const [presentationData, setPresentationData] = useState<Presentation | null>(null);
@@ -2523,17 +2524,45 @@ const HostView = ({ user }: { user: User }) => {
   }, [currentSlide?.id, currentSlide?.points]);
 
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws.current = new WebSocket(`${protocol}//${window.location.host}`);
+    let disposed = false;
 
-    ws.current.onopen = () => {
-      setIsConnected(true);
-      ws.current?.send(JSON.stringify({ type: 'HOST_START', presentationId: id }));
+    const clearHostReconnectTimer = () => {
+      if (hostReconnectTimerRef.current !== null) {
+        window.clearTimeout(hostReconnectTimerRef.current);
+        hostReconnectTimerRef.current = null;
+      }
     };
 
-    ws.current.onclose = () => setIsConnected(false);
+    const scheduleReconnect = () => {
+      if (disposed || hostReconnectTimerRef.current !== null) return;
+      hostReconnectTimerRef.current = window.setTimeout(() => {
+        hostReconnectTimerRef.current = null;
+        connectHostSocket();
+      }, 2000);
+    };
 
-    ws.current.onmessage = (e) => {
+    const connectHostSocket = () => {
+      if (disposed) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const socket = new WebSocket(`${protocol}//${window.location.host}`);
+      ws.current = socket;
+
+      socket.onopen = () => {
+        clearHostReconnectTimer();
+        setIsConnected(true);
+        socket.send(JSON.stringify({ type: 'HOST_START', presentationId: id }));
+      };
+
+      socket.onerror = () => {
+        setIsConnected(false);
+      };
+
+      socket.onclose = () => {
+        setIsConnected(false);
+        scheduleReconnect();
+      };
+
+      socket.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       switch (msg.type) {
         case 'ROOM_CREATED':
@@ -2658,9 +2687,16 @@ const HostView = ({ user }: { user: User }) => {
           }
           break;
       }
+      };
     };
 
-    return () => ws.current?.close();
+    connectHostSocket();
+
+    return () => {
+      disposed = true;
+      clearHostReconnectTimer();
+      ws.current?.close();
+    };
   }, [id]);
 
   const nextSlide = () => {
@@ -2990,6 +3026,11 @@ const HostView = ({ user }: { user: User }) => {
     ? liveWhiteboardDrawings.findIndex((drawing) => drawing.id === selectedLiveDrawing.id)
     : -1;
   const unansweredLiveStudents = liveActivity ? Math.max(0, students.length - liveActivity.totalResponses) : 0;
+  const liveResponsesSummary = liveActivity
+    ? (students.length > 0
+      ? `${liveActivity.totalResponses}/${students.length} • Чакат: ${unansweredLiveStudents}`
+      : `${liveActivity.totalResponses} отговора`)
+    : '';
 
   useEffect(() => {
     if (!liveActivity || liveActivity.type !== 'whiteboard') {
@@ -3015,7 +3056,7 @@ const HostView = ({ user }: { user: User }) => {
   }, [liveActivity, selectedLiveDrawingId, pinnedLiveDrawingId]);
 
   if (!currentSlide) {
-    const joinUrl = `${window.location.origin}/join?pin=${pin}`;
+    const joinUrl = pin ? `${window.location.origin}/join?pin=${pin}` : '';
     
     if (isFinished) {
       return (
@@ -3092,24 +3133,30 @@ const HostView = ({ user }: { user: User }) => {
           <div className="flex flex-col md:flex-row items-center gap-12 mb-8">
             <div className="text-center">
               <p className="text-2xl opacity-80 mb-4">Присъединете се на:</p>
-              <h1 className="text-8xl font-black tracking-widest mb-4">{pin}</h1>
-              <p className="text-xl opacity-60">или сканирайте QR кода</p>
+              <h1 className="text-8xl font-black tracking-widest mb-4">{pin || '......'}</h1>
+              <p className="text-xl opacity-60">{pin ? 'или сканирайте QR кода' : 'Свързваме се със сървъра...'}</p>
             </div>
             <div className="bg-white p-6 rounded-3xl shadow-2xl">
-              <QRCodeSVG 
-                value={joinUrl || ''} 
-                size={200}
-                level="H"
-                includeMargin={false}
-                imageSettings={{
-                  src: "https://lucide.dev/logo.svg",
-                  x: undefined,
-                  y: undefined,
-                  height: 40,
-                  width: 40,
-                  excavate: true,
-                }}
-              />
+              {pin ? (
+                <QRCodeSVG
+                  value={joinUrl}
+                  size={200}
+                  level="H"
+                  includeMargin={false}
+                  imageSettings={{
+                    src: "https://lucide.dev/logo.svg",
+                    x: undefined,
+                    y: undefined,
+                    height: 40,
+                    width: 40,
+                    excavate: true,
+                  }}
+                />
+              ) : (
+                <div className="w-[200px] h-[200px] rounded-2xl border-2 border-dashed border-indigo-200 flex items-center justify-center text-indigo-400 font-semibold text-sm">
+                  Няма връзка
+                </div>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -3304,7 +3351,7 @@ const HostView = ({ user }: { user: User }) => {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-widest text-indigo-500">Live активност</span>
                 <span className="text-sm font-bold text-gray-500">
-                  {liveActivity.totalResponses}/{students.length} • Чакат: {unansweredLiveStudents}
+                  {liveResponsesSummary}
                 </span>
               </div>
               <h4 className="text-lg font-black text-gray-900">{liveActivity.question}</h4>
@@ -4000,8 +4047,11 @@ const StudentView = () => {
   const timerRef = useRef<any>(null);
   const ws = useRef<WebSocket | null>(null);
   const whiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const whiteboardIsDrawingRef = useRef(false);
+  const whiteboardPointerIdRef = useRef<number | null>(null);
   const liveWhiteboardCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const liveWhiteboardDrawingRef = useRef(false);
+  const liveWhiteboardPointerIdRef = useRef<number | null>(null);
   const navigate = useNavigate();
 
 
@@ -4110,6 +4160,7 @@ const StudentView = () => {
   const [draggedOrderingIndex, setDraggedOrderingIndex] = useState<number | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [categorizationResponse, setCategorizationResponse] = useState<Record<string, string>>({});
+  const [whiteboardTool, setWhiteboardTool] = useState<'pen' | 'eraser'>('pen');
   const [whiteboardColor, setWhiteboardColor] = useState('#4f46e5');
   const [whiteboardLineWidth, setWhiteboardLineWidth] = useState(3);
   const [whiteboardHistory, setWhiteboardHistory] = useState<string[]>([]);
@@ -4117,6 +4168,8 @@ const StudentView = () => {
   const [liveActivity, setLiveActivity] = useState<LiveActivityStudent | null>(null);
   const [liveActivityResponse, setLiveActivityResponse] = useState('');
   const [liveActivitySubmitted, setLiveActivitySubmitted] = useState(false);
+  const [liveWhiteboardColor, setLiveWhiteboardColor] = useState('#4f46e5');
+  const [liveWhiteboardLineWidth, setLiveWhiteboardLineWidth] = useState(4);
 
   const submitResponse = (response: any) => {
     ws.current?.send(JSON.stringify({ type: 'SUBMIT_RESPONSE', response }));
@@ -4147,44 +4200,45 @@ const StudentView = () => {
     if (!ctx) return;
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#4f46e5';
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = liveWhiteboardColor;
+    ctx.lineWidth = liveWhiteboardLineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
   };
 
-  const getLiveWhiteboardPoint = (event: any) => {
+  const getLiveWhiteboardPoint = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = liveWhiteboardCanvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    if (event.touches && event.touches.length > 0) {
-      return {
-        x: event.touches[0].clientX - rect.left,
-        y: event.touches[0].clientY - rect.top
-      };
-    }
     return {
       x: event.clientX - rect.left,
       y: event.clientY - rect.top
     };
   };
 
-  const startLiveWhiteboardDraw = (event: any) => {
+  const startLiveWhiteboardDraw = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.preventDefault();
+    if (liveWhiteboardPointerIdRef.current !== null && liveWhiteboardPointerIdRef.current !== event.pointerId) return;
     const canvas = liveWhiteboardCanvasRef.current;
     if (!canvas || liveActivitySubmitted) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    canvas.setPointerCapture(event.pointerId);
+    liveWhiteboardPointerIdRef.current = event.pointerId;
     const point = getLiveWhiteboardPoint(event);
     liveWhiteboardDrawingRef.current = true;
     ctx.beginPath();
+    ctx.strokeStyle = liveWhiteboardColor;
+    ctx.lineWidth = event.pointerType === 'touch' ? Math.max(liveWhiteboardLineWidth, 4) : liveWhiteboardLineWidth;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     ctx.moveTo(point.x, point.y);
   };
 
-  const moveLiveWhiteboardDraw = (event: any) => {
+  const moveLiveWhiteboardDraw = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.preventDefault();
     const canvas = liveWhiteboardCanvasRef.current;
-    if (!canvas || !liveWhiteboardDrawingRef.current || liveActivitySubmitted) return;
+    if (!canvas || !liveWhiteboardDrawingRef.current || liveActivitySubmitted || liveWhiteboardPointerIdRef.current !== event.pointerId) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const point = getLiveWhiteboardPoint(event);
@@ -4192,7 +4246,13 @@ const StudentView = () => {
     ctx.stroke();
   };
 
-  const stopLiveWhiteboardDraw = () => {
+  const stopLiveWhiteboardDraw = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (liveWhiteboardPointerIdRef.current !== event.pointerId) return;
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (canvas.hasPointerCapture(event.pointerId)) {
+      canvas.releasePointerCapture(event.pointerId);
+    }
+    liveWhiteboardPointerIdRef.current = null;
     liveWhiteboardDrawingRef.current = false;
   };
 
@@ -4280,6 +4340,9 @@ const StudentView = () => {
       setCategorizationResponse({});
     }
     if (currentSlide?.type === 'whiteboard') {
+      setWhiteboardTool('pen');
+      whiteboardIsDrawingRef.current = false;
+      whiteboardPointerIdRef.current = null;
       setWhiteboardHistory([]);
       setWhiteboardHistoryIndex(-1);
       requestAnimationFrame(() => {
@@ -4298,6 +4361,16 @@ const StudentView = () => {
     if (liveActivity?.type !== 'whiteboard' || liveActivitySubmitted) return;
     requestAnimationFrame(() => initializeLiveWhiteboardCanvas());
   }, [liveActivity, liveActivitySubmitted]);
+
+  useEffect(() => {
+    if (liveActivity?.type !== 'whiteboard') return;
+    const canvas = liveWhiteboardCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.strokeStyle = liveWhiteboardColor;
+    ctx.lineWidth = liveWhiteboardLineWidth;
+  }, [liveActivity, liveWhiteboardColor, liveWhiteboardLineWidth]);
 
   if (status === 'closed') {
     return (
@@ -4421,16 +4494,42 @@ const StudentView = () => {
                 </div>
               ) : liveActivity.type === 'whiteboard' ? (
                 <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-100 bg-white/80 px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      {['#4f46e5', '#ef4444', '#10b981', '#111827'].map((color) => (
+                        <button
+                          key={color}
+                          type="button"
+                          disabled={liveActivitySubmitted}
+                          onClick={() => setLiveWhiteboardColor(color)}
+                          className={`w-6 h-6 rounded-full border-2 ${liveWhiteboardColor === color ? 'border-gray-900 scale-110' : 'border-white shadow'}`}
+                          style={{ backgroundColor: color }}
+                          aria-label={`Цвят ${color}`}
+                        />
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2 min-w-[140px]">
+                      <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Размер</span>
+                      <input
+                        type="range"
+                        min="2"
+                        max="12"
+                        value={liveWhiteboardLineWidth}
+                        onChange={(e) => setLiveWhiteboardLineWidth(parseInt(e.target.value))}
+                        disabled={liveActivitySubmitted}
+                        className="flex-1 accent-indigo-600"
+                        aria-label="Дебелина на live четката"
+                      />
+                    </div>
+                  </div>
                   <canvas
                     ref={liveWhiteboardCanvasRef}
-                    className={`w-full h-52 rounded-xl border-2 border-indigo-200 bg-white ${liveActivitySubmitted ? 'opacity-70' : 'cursor-crosshair'}`}
-                    onMouseDown={startLiveWhiteboardDraw}
-                    onMouseMove={moveLiveWhiteboardDraw}
-                    onMouseUp={stopLiveWhiteboardDraw}
-                    onMouseLeave={stopLiveWhiteboardDraw}
-                    onTouchStart={startLiveWhiteboardDraw}
-                    onTouchMove={moveLiveWhiteboardDraw}
-                    onTouchEnd={stopLiveWhiteboardDraw}
+                    className={`w-full h-52 rounded-xl border-2 border-indigo-200 bg-white touch-none ${liveActivitySubmitted ? 'opacity-70' : 'cursor-crosshair'}`}
+                    onPointerDown={startLiveWhiteboardDraw}
+                    onPointerMove={moveLiveWhiteboardDraw}
+                    onPointerUp={stopLiveWhiteboardDraw}
+                    onPointerCancel={stopLiveWhiteboardDraw}
+                    onPointerLeave={stopLiveWhiteboardDraw}
                   />
                   <div className="flex items-center justify-end gap-2">
                     <Button className="px-4 py-2" variant="secondary" disabled={liveActivitySubmitted} onClick={clearLiveWhiteboard}>
@@ -4440,6 +4539,7 @@ const StudentView = () => {
                       Изпрати рисунка
                     </Button>
                   </div>
+                  <p className="text-[11px] text-gray-500 font-medium">Съвет: с един пръст рисуваш, с два пръста преместваш страницата.</p>
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
@@ -4639,6 +4739,25 @@ const StudentView = () => {
                 ))}
               </div>
 
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={whiteboardTool === 'pen' ? 'primary' : 'secondary'}
+                  className="h-10 px-3"
+                  disabled={submitted}
+                  onClick={() => setWhiteboardTool('pen')}
+                >
+                  ✏️ Писец
+                </Button>
+                <Button
+                  variant={whiteboardTool === 'eraser' ? 'primary' : 'secondary'}
+                  className="h-10 px-3"
+                  disabled={submitted}
+                  onClick={() => setWhiteboardTool('eraser')}
+                >
+                  🧽 Гума
+                </Button>
+              </div>
+
               <div className="flex items-center gap-2 min-w-[180px]">
                 <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Дебелина</span>
                 <input
@@ -4652,6 +4771,20 @@ const StudentView = () => {
                   aria-label="Дебелина на четката"
                 />
                 <span className="text-xs font-bold text-indigo-600 w-6 text-right">{whiteboardLineWidth}</span>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {[2, 4, 7, 10].map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    disabled={submitted}
+                    onClick={() => setWhiteboardLineWidth(size)}
+                    className={`h-8 px-2 rounded-lg border text-xs font-bold transition ${whiteboardLineWidth === size ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 bg-white text-gray-500'}`}
+                  >
+                    {size}px
+                  </button>
+                ))}
               </div>
 
               <div className="flex items-center gap-2">
@@ -4706,6 +4839,9 @@ const StudentView = () => {
                 </Button>
               </div>
             </div>
+            <p className="text-xs text-gray-500 font-medium">
+              Телефон: рисувай с един пръст. Избери „Гума“ за изтриване на части от рисунката.
+            </p>
 
             <div className="flex-1 bg-white rounded-3xl border-2 border-gray-200 relative overflow-hidden">
               {currentSlide.content.imageUrl && (
@@ -4713,14 +4849,18 @@ const StudentView = () => {
               )}
               <canvas 
                 ref={whiteboardCanvasRef}
-                className="absolute inset-0 w-full h-full cursor-crosshair touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                className="absolute inset-0 w-full h-full cursor-crosshair touch-none select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                 tabIndex={0}
                 aria-label="Поле за рисуване"
                 onPointerDown={(e) => {
+                  if (submitted) return;
+                  if (whiteboardPointerIdRef.current !== null && whiteboardPointerIdRef.current !== e.pointerId) return;
                   const canvas = e.currentTarget;
                   const rect = canvas.getBoundingClientRect();
                   const ctx = canvas.getContext('2d');
                   if (!ctx) return;
+                  canvas.setPointerCapture(e.pointerId);
+                  whiteboardPointerIdRef.current = e.pointerId;
                   
                   // Set canvas internal resolution if not set
                   if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
@@ -4729,15 +4869,17 @@ const StudentView = () => {
                   }
 
                   ctx.beginPath();
-                  ctx.lineWidth = whiteboardLineWidth;
+                  ctx.lineWidth = e.pointerType === 'touch' ? Math.max(whiteboardLineWidth, 4) : whiteboardLineWidth;
                   ctx.lineCap = 'round';
+                  ctx.lineJoin = 'round';
+                  ctx.globalCompositeOperation = whiteboardTool === 'eraser' ? 'destination-out' : 'source-over';
                   ctx.strokeStyle = whiteboardColor;
                   ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
-                  (canvas as any).isDrawing = true;
+                  whiteboardIsDrawingRef.current = true;
                 }}
                 onPointerMove={(e) => {
                   const canvas = e.currentTarget;
-                  if (!(canvas as any).isDrawing) return;
+                  if (!whiteboardIsDrawingRef.current || whiteboardPointerIdRef.current !== e.pointerId || submitted) return;
                   const rect = canvas.getBoundingClientRect();
                   const ctx = canvas.getContext('2d');
                   if (!ctx) return;
@@ -4746,15 +4888,34 @@ const StudentView = () => {
                 }}
                 onPointerUp={(e) => {
                   const canvas = e.currentTarget;
-                  if ((canvas as any).isDrawing) {
-                    (canvas as any).isDrawing = false;
+                  if (whiteboardPointerIdRef.current !== e.pointerId) return;
+                  if (canvas.hasPointerCapture(e.pointerId)) {
+                    canvas.releasePointerCapture(e.pointerId);
+                  }
+                  whiteboardPointerIdRef.current = null;
+                  if (whiteboardIsDrawingRef.current) {
+                    whiteboardIsDrawingRef.current = false;
+                    saveWhiteboardSnapshot(canvas);
+                  }
+                }}
+                onPointerCancel={(e) => {
+                  const canvas = e.currentTarget;
+                  if (whiteboardPointerIdRef.current !== e.pointerId) return;
+                  if (canvas.hasPointerCapture(e.pointerId)) {
+                    canvas.releasePointerCapture(e.pointerId);
+                  }
+                  whiteboardPointerIdRef.current = null;
+                  if (whiteboardIsDrawingRef.current) {
+                    whiteboardIsDrawingRef.current = false;
                     saveWhiteboardSnapshot(canvas);
                   }
                 }}
                 onPointerLeave={(e) => {
                   const canvas = e.currentTarget;
-                  if ((canvas as any).isDrawing) {
-                    (canvas as any).isDrawing = false;
+                  if (whiteboardPointerIdRef.current !== e.pointerId) return;
+                  if (whiteboardIsDrawingRef.current) {
+                    whiteboardIsDrawingRef.current = false;
+                    whiteboardPointerIdRef.current = null;
                     saveWhiteboardSnapshot(canvas);
                   }
                 }}
