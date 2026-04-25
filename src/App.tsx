@@ -3026,6 +3026,11 @@ const HostView = ({ user }: { user: User }) => {
     ? liveWhiteboardDrawings.findIndex((drawing) => drawing.id === selectedLiveDrawing.id)
     : -1;
   const unansweredLiveStudents = liveActivity ? Math.max(0, students.length - liveActivity.totalResponses) : 0;
+  const liveResponsesSummary = liveActivity
+    ? (students.length > 0
+      ? `${liveActivity.totalResponses}/${students.length} • Чакат: ${unansweredLiveStudents}`
+      : `${liveActivity.totalResponses} отговора`)
+    : '';
 
   useEffect(() => {
     if (!liveActivity || liveActivity.type !== 'whiteboard') {
@@ -3346,9 +3351,7 @@ const HostView = ({ user }: { user: User }) => {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-widest text-indigo-500">Live активност</span>
                 <span className="text-sm font-bold text-gray-500">
-                  {students.length > 0
-                    ? `${liveActivity.totalResponses}/${students.length} • Чакат: ${unansweredLiveStudents}`
-                    : `${liveActivity.totalResponses} отговора`}
+                  {liveResponsesSummary}
                 </span>
               </div>
               <h4 className="text-lg font-black text-gray-900">{liveActivity.question}</h4>
